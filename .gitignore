@@ -1,0 +1,75 @@
+# Visual Studio / C# / .NET ignore file
+
+# Build directories
+[Bb]in/
+[Oo]bj/
+**/bin/
+**/obj/
+
+# Visual Studio workspace & settings
+.vs/
+.vscode/
+*.suo
+*.user
+*.userosscache
+*.sln.docstates
+
+# Rider / IntelliJ
+.idea/
+*.sln.iml
+
+# ReSharper
+_ReSharper*/
+*.ReSharper
+*.DotSettings.user
+
+# NuGet packages
+*.nupkg
+*.snupkg
+packages/
+.nuget/packages/
+
+# Publish output
+PublishProfiles/
+*.Publish.xml
+*.PublishSettings
+publish/
+out/
+artifacts/
+
+# Test results / coverage
+TestResults/
+*.trx
+*.coverage
+*.coveragexml
+coverage/
+
+# Logs & temp files
+*.log
+*.tlog
+*.tmp
+*.temp
+*.bak
+*.swp
+
+# Database files
+*.mdf
+*.ldf
+
+# Local secrets / config
+secrets.json
+*.usersecrets
+appsettings.*.Local.json
+appsettings.*.Secrets.json
+
+# Generated lock files / tooling
+project.lock.json
+project.fragment.lock.json
+
+# Frontend / package managers (if present)
+node_modules/
+bower_components/
+
+# OS files
+.DS_Store
+Thumbs.db
