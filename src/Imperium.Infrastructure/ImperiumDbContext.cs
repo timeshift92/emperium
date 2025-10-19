@@ -17,6 +17,7 @@ public class ImperiumDbContext : DbContext
     public DbSet<WorldTime> WorldTimes { get; set; } = null!;
     public DbSet<GameAction> GameActions { get; set; } = null!;
     public DbSet<CrimeRecord> CrimeRecords { get; set; } = null!;
+    public DbSet<Relationship> Relationships { get; set; } = null!;
 
     protected override void OnModelCreating(ModelBuilder modelBuilder)
     {
@@ -24,5 +25,6 @@ public class ImperiumDbContext : DbContext
         // Простая конфигурация, позже можно расширить
         modelBuilder.Entity<Character>().HasKey(c => c.Id);
         modelBuilder.Entity<Family>().HasKey(f => f.Id);
+        modelBuilder.Entity<Relationship>().HasIndex(r => new { r.SourceId, r.TargetId }).IsUnique();
     }
 }

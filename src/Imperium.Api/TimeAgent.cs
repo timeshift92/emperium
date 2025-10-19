@@ -55,8 +55,10 @@ public class TimeAgent : IWorldAgent
         // persist worldTime
         await db.SaveChangesAsync(ct);
 
-        // Emit tick event
-        db.GameEvents.Add(new GameEvent
+        // Emit tick event via central dispatcher (non-blocking for agents)
+        var dispatcher = scopeServices.GetRequiredService<Imperium.Domain.Services.IEventDispatcher>();
+
+        await dispatcher.EnqueueAsync(new GameEvent
         {
             Id = Guid.NewGuid(),
             Timestamp = DateTime.UtcNow,
@@ -69,7 +71,7 @@ public class TimeAgent : IWorldAgent
         var newDay = worldTime.Tick / ticksPerDay;
         if (newDay != oldDay)
         {
-            db.GameEvents.Add(new GameEvent
+            await dispatcher.EnqueueAsync(new GameEvent
             {
                 Id = Guid.NewGuid(),
                 Timestamp = DateTime.UtcNow,
@@ -83,7 +85,7 @@ public class TimeAgent : IWorldAgent
         var newYear = worldTime.Tick / ticksPerYear;
         if (newYear != oldYear)
         {
-            db.GameEvents.Add(new GameEvent
+            await dispatcher.EnqueueAsync(new GameEvent
             {
                 Id = Guid.NewGuid(),
                 Timestamp = DateTime.UtcNow,
@@ -92,7 +94,5 @@ public class TimeAgent : IWorldAgent
                 PayloadJson = JsonSerializer.Serialize(new { year = worldTime.Year })
             });
         }
-
-        await db.SaveChangesAsync(ct);
     }
 }

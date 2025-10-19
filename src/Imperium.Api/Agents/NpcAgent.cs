@@ -25,6 +25,43 @@ public class NpcAgent : IWorldAgent
         _logger = logger;
     }
 
+    // Попытаться распарсить строку JSON и вернуть JsonElement (через object), иначе вернуть исходную строку
+    private static object? TryParseJsonOrRaw(string? json)
+    {
+        if (string.IsNullOrWhiteSpace(json)) return null;
+        try
+        {
+            using var doc = JsonDocument.Parse(json);
+            return JsonSerializer.Deserialize<object>(doc.RootElement.GetRawText())!;
+        }
+        catch
+        {
+            return json;
+        }
+    }
+
+    // Вспомогательный метод: вызов LLM с таймаутом и безопасной обработкой отмены
+    private static async Task<string?> CallLlmWithTimeoutAsync(ILlmClient llm, string prompt, CancellationToken outerCt)
+    {
+    // Таймаут на каждый LLM-вызов — 8 секунд (потому что мы хотим, чтобы тик не висел долго)
+    using var cts = CancellationTokenSource.CreateLinkedTokenSource(outerCt);
+    cts.CancelAfter(TimeSpan.FromSeconds(8));
+        try
+        {
+            return await llm.SendPromptAsync(prompt, cts.Token);
+        }
+        catch (OperationCanceledException)
+        {
+            // не пробрасываем дальше — логируется в вызывающем коде
+            return null;
+        }
+        catch (Exception)
+        {
+            // swallow to avoid breaking tick loop; caller logs details
+            return null;
+        }
+    }
+
     public async Task TickAsync(IServiceProvider scope, CancellationToken ct)
     {
         var db = scope.GetRequiredService<ImperiumDbContext>();
@@ -56,8 +93,10 @@ public class NpcAgent : IWorldAgent
 
             try
             {
+                var metrics = scope.GetService<Imperium.Api.MetricsService>();
                 string? raw = null;
-                const int maxAttempts = 5;
+                // Меньше попыток — быстрее тики в dev-режиме
+                const int maxAttempts = 2;
                 int reasksPerformed = 0;
                 int sanitizations = 0;
 
@@ -65,18 +104,18 @@ public class NpcAgent : IWorldAgent
                 {
                     // Первая попытка — основной промпт, остальные — уточнения
                     if (attempt == 1)
-                        raw = await llm.SendPromptAsync(prompt, ct);
+                        raw = await CallLlmWithTimeoutAsync(llm, prompt, ct);
                     else
                     {
                         reasksPerformed++;
-                        raw = await llm.SendPromptAsync(ReaskPrompt(), ct);
+                        raw = await CallLlmWithTimeoutAsync(llm, ReaskPrompt(), ct);
                     }
 
                     if (string.IsNullOrWhiteSpace(raw))
                         continue;
 
                     // Если в ответе латиница (англ. буквы) — чаще всего модель утекла в технический режим -> reask
-                    if (ContainsLatinLetters(raw) && attempt < maxAttempts)
+                    if (IsSignificantLatinOrTechnical(raw) && attempt < maxAttempts)
                     {
                         _logger?.LogInformation("NpcAgent: latin detected in raw reply for {Character} — reasking", ch.Name);
                         continue;
@@ -93,19 +132,19 @@ public class NpcAgent : IWorldAgent
                     if (TryParseNpcReply(raw, out var reply, out var mood))
                     {
                         // Если в reply есть латиница или запрещённые токены на последней попытке — попробуем rewrite
-                        if ((ContainsLatinLetters(reply) || HasForbiddenTokens(reply, forbidden)) && attempt < maxAttempts)
+                        if ((IsSignificantLatinOrTechnical(reply) || HasForbiddenTokens(reply, forbidden)) && attempt < maxAttempts)
                         {
                             _logger?.LogInformation("NpcAgent: reply contains latin/forbidden on attempt {Attempt} for {Character}", attempt, ch.Name);
                             continue;
                         }
 
-                        if ((ContainsLatinLetters(reply) || HasForbiddenTokens(reply, forbidden)) && attempt == maxAttempts)
+                        if ((IsSignificantLatinOrTechnical(reply) || HasForbiddenTokens(reply, forbidden)) && attempt == maxAttempts)
                         {
                             // финальная попытка: просим LLM переформулировать reply как архаичный русский
                             try
                             {
                                 var rewritePrompt = BuildRewritePrompt(reply);
-                                var rewritten = await llm.SendPromptAsync(rewritePrompt, ct);
+                                var rewritten = await CallLlmWithTimeoutAsync(llm, rewritePrompt, ct);
                                 if (!string.IsNullOrWhiteSpace(rewritten) && TryParseNpcReply(rewritten, out var newReply, out var newMood))
                                 {
                                     reply = newReply;
@@ -133,12 +172,17 @@ public class NpcAgent : IWorldAgent
                             Id = Guid.NewGuid(),
                             Timestamp = DateTime.UtcNow,
                             Type = "npc_reply",
-                            Location = "unknown",
+                            Location = ch.LocationName ?? "unknown",
                             PayloadJson = JsonSerializer.Serialize(new
                             {
                                 characterId = ch.Id,
                                 name = ch.Name,
                                 archetype,
+                                location = ch.LocationName,
+                                // Try to include structured JSON for essence/skills if possible
+                                essence = TryParseJsonOrRaw(ch.EssenceJson),
+                                skills = TryParseJsonOrRaw(ch.SkillsJson),
+                                history = ch.History,
                                 reply,
                                 moodDelta = mood,
                                 meta = new { reasksPerformed, sanitizations }
@@ -149,7 +193,14 @@ public class NpcAgent : IWorldAgent
                     }
                 }
                 if (reasksPerformed > 0)
+                {
                     _logger?.LogInformation("NpcAgent: reasks={Reasks} sanitizations={Sanitizations} for {Character}", reasksPerformed, sanitizations, ch.Name);
+                    metrics?.Add("npc.reasks", reasksPerformed);
+                }
+                if (sanitizations > 0)
+                {
+                    metrics?.Add("npc.sanitizations", sanitizations);
+                }
             }
             catch (Exception ex)
             {
@@ -157,24 +208,14 @@ public class NpcAgent : IWorldAgent
             }
         }
 
-        // 💾 Сохранение всех событий одним запросом
+        // Enqueue events for background persistence and publishing
         if (events.Count > 0)
         {
-            db.GameEvents.AddRange(events);
-            await db.SaveChangesAsync(ct);
-
-            // 🔄 Асинхронная публикация (fire-and-forget)
-            _ = Task.Run(async () =>
+            var dispatcher = scope.GetRequiredService<Imperium.Domain.Services.IEventDispatcher>();
+            foreach (var ev in events)
             {
-                foreach (var ev in events)
-                {
-                    try { await stream.PublishEventAsync(ev); }
-                    catch (Exception ex)
-                    {
-                        _logger?.LogError(ex, "NpcAgent: ошибка публикации события {EventId}", ev.Id);
-                    }
-                }
-            }, ct);
+                _ = dispatcher.EnqueueAsync(ev);
+            }
         }
     }
 
@@ -198,14 +239,17 @@ public class NpcAgent : IWorldAgent
     {
         var npcNameJson = JsonSerializer.Serialize(ch.Name);
         var skillsJson = ch.SkillsJson ?? "[]";
+        var essence = ch.EssenceJson ?? "{}";
+        var loc = string.IsNullOrWhiteSpace(ch.LocationName) ? "неизвестно" : ch.LocationName;
+        var history = string.IsNullOrWhiteSpace(ch.History) ? "" : ch.History;
         return
-            "[role:Npc]\n" +
+            "[role:Npc]\n отвечать надо строго на русском языке" +
             $"Вы — персонаж античного мира ({archetype}). " +
             "Говорите как житель эпохи: бытовой, архаичный стиль, упоминания богов, урожая, дорог, налогов. " +
             "НИ В КОЕМ СЛУЧАЕ не используйте современные термины (интернет, компьютер, сервер, API, GitHub и т.п.). " +
             "Ответьте ТОЛЬКО компактным JSON: {\"reply\": string, \"moodDelta\": int (опционально)}. " +
             "reply — максимум ~35 слов; moodDelta — опционально.\n" +
-            $"Контекст: персонаж {npcNameJson}, возраст: {ch.Age}, статус: {ch.Status ?? "unknown"}, навыки: {skillsJson}, время: {DateTime.UtcNow:O}.";
+            $"Контекст: персонаж {npcNameJson}, возраст: {ch.Age}, статус: {ch.Status ?? "unknown"}, место: {loc}, навыки: {skillsJson}, характеристики: {essence}, краткая история: {history}, время: {DateTime.UtcNow:O}.";
     }
 
     // 🔁 Повторный промпт при ошибке
@@ -250,11 +294,36 @@ public class NpcAgent : IWorldAgent
         return Regex.Replace(s, "\\s+", " ", RegexOptions.Compiled).Trim();
     }
 
-    // Проверка: есть ли латинские символы
-    private static bool ContainsLatinLetters(string input)
+    // Проверка: содержит ли ответ заметное количество латиницы или явные технические/метаданные
+    // Ранее простая проверка по наличию любых латинских букв давала много ложных срабатываний
+    // (например, короткие имена, даты или единицы). Здесь используем долю латинских букв от всех
+    // букв и дополнительные шаблоны (url, email, блоки кода, служебные слова) чтобы принимать
+    // решение о необходимости reask только в явных случаях.
+    private static bool IsSignificantLatinOrTechnical(string input)
     {
         if (string.IsNullOrWhiteSpace(input)) return false;
-        return Regex.IsMatch(input, "[A-Za-z]", RegexOptions.Compiled);
+
+        // посчитаем латинские и все буквы (латиница + кириллица)
+        var latinMatches = Regex.Matches(input, "[A-Za-z]", RegexOptions.Compiled);
+        var letterMatches = Regex.Matches(input, "[A-Za-zА-Яа-я]", RegexOptions.Compiled);
+        int latin = latinMatches.Count;
+        int letters = Math.Max(1, letterMatches.Count); // защититься от деления на 0
+
+        double ratio = (double)latin / letters;
+
+        // Если более 25% букв — подозрительно
+        if (ratio > 0.25) return true;
+
+        var lower = input.ToLowerInvariant();
+
+        // Явные технические сигнатуры, URL/email, блоки кода, служебные метки
+        if (lower.Contains("http") || lower.Contains("www.") || lower.Contains("@") || lower.Contains("mailto:")
+            || lower.Contains("```") || lower.Contains("<code>") || lower.Contains("model:") || lower.Contains("temperature")
+            || lower.Contains("tokens") || lower.Contains("usage") || lower.Contains("stop")
+            || Regex.IsMatch(input, @"\b(api|github|stack overflow|stackoverflow|computer|server|internet)\b", RegexOptions.IgnoreCase))
+            return true;
+
+        return false;
     }
 
     // Пост-промпт: перепиши reply в архаичный русский, верни JSON

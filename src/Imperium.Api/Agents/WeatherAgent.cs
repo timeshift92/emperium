@@ -82,6 +82,7 @@ public class WeatherAgent : IWorldAgent
         };
         db.WeatherSnapshots.Add(snap);
         var stream = scopeServices.GetRequiredService<Imperium.Api.EventStreamService>();
+        var dispatcher = scopeServices.GetRequiredService<Imperium.Domain.Services.IEventDispatcher>();
         try
         {
             await db.SaveChangesAsync(ct);
@@ -89,7 +90,7 @@ public class WeatherAgent : IWorldAgent
             _logger.LogInformation("WeatherAgent: saved snapshot {Id} cond={Cond} t={T}C p={P}mm", snap.Id, snap.Condition, snap.TemperatureC, snap.PrecipitationMm);
             // publish snapshot to SSE stream
             _ = stream.PublishWeatherAsync(snap);
-            // also publish a game event for weather_update
+            // enqueue a game event for weather_update to dispatcher
             var ev = new GameEvent
             {
                 Id = Guid.NewGuid(),
@@ -98,9 +99,7 @@ public class WeatherAgent : IWorldAgent
                 Location = "global",
                 PayloadJson = System.Text.Json.JsonSerializer.Serialize(new { snapshotId = snap.Id, condition = snap.Condition, temperatureC = snap.TemperatureC })
             };
-            db.GameEvents.Add(ev);
-            await db.SaveChangesAsync(ct);
-            _ = stream.PublishEventAsync(ev);
+            _ = dispatcher.EnqueueAsync(ev);
         }
         catch (Exception ex)
         {

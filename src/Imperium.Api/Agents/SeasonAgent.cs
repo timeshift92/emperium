@@ -38,6 +38,7 @@ public class SeasonAgent : IWorldAgent
 
         // read current season state (singleton)
     var state = await db.SeasonStates.OrderByDescending(s => s.StartedAt).FirstOrDefaultAsync(ct);
+        var dispatcher = scopeServices.GetRequiredService<Imperium.Domain.Services.IEventDispatcher>();
         if (state == null)
         {
             state = new SeasonState
@@ -50,15 +51,16 @@ public class SeasonAgent : IWorldAgent
                 DurationTicks = 0
             };
             db.SeasonStates.Add(state);
-            db.GameEvents.Add(new GameEvent
+            await db.SaveChangesAsync(ct);
+            var ev = new GameEvent
             {
                 Id = Guid.NewGuid(),
                 Timestamp = DateTime.UtcNow,
                 Type = "season_set",
                 Location = "global",
                 PayloadJson = JsonSerializer.Serialize(new { season = state.CurrentSeason, avgTemp, avgPrecip })
-            });
-            await db.SaveChangesAsync(ct);
+            };
+            _ = dispatcher.EnqueueAsync(ev);
             metrics.Increment("season.initialized");
             return;
         }
@@ -72,16 +74,17 @@ public class SeasonAgent : IWorldAgent
             state.StartedAt = DateTime.UtcNow;
             state.DurationTicks = 0;
 
-            db.GameEvents.Add(new GameEvent
+            var ev = new GameEvent
             {
                 Id = Guid.NewGuid(),
                 Timestamp = DateTime.UtcNow,
                 Type = "season_change",
                 Location = "global",
                 PayloadJson = JsonSerializer.Serialize(new { season = state.CurrentSeason, avgTemp, avgPrecip })
-            });
+            };
             metrics.Increment("season.changes");
             await db.SaveChangesAsync(ct);
+            _ = dispatcher.EnqueueAsync(ev);
             return;
         }
 
