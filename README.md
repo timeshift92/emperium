@@ -2,14 +2,14 @@
 # Imperium Aspire Skeleton (MVP)
 
 **Состав:**
-- `Imperium.Api` — ASP.NET 8 Minimal API (Swagger, TickWorker)
+- `Imperium.Api` — ASP.NET 9 Minimal API (Swagger, TickWorker)
 - `Imperium.Domain` — модели и сервисы (Economy/Decrees/NPC)
 - `Imperium.Infrastructure` — EF Core + SQLite
 - `Imperium.Llm` — простой OpenAI клиент (Chat Completions)
 - `Imperium.AppHost`, `Imperium.ServiceDefaults` — скелет для оркестрации (Aspire-стиль)
 
 **Запуск (локально):**
-1) Установи .NET 8 SDK
+1) Установи .NET 9 SDK
 2) Экспортируй ключ: `export OPENAI_API_KEY=sk-...`
 3) `dotnet build`
 4) `dotnet run --project src/Imperium.Api`  
@@ -49,3 +49,7 @@ Weather POST will be added to allow manual override in future updates.
  - Conflict: "Assess revolt risk based on avg loyalty L and treasury T. Return short assessment." 
 
 Удачи! 👑
+
+## Docs и вклад
+- CONTRIBUTING: https://github.com/timeshift92/emperium/blob/main/CONTRIBUTING.md
+- Архитектура: https://github.com/timeshift92/emperium/blob/main/docs/architecture.md
