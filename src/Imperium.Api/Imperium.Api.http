@@ -1,0 +1,6 @@
+@Imperium.Api_HostAddress = http://localhost:5288
+
+GET {{Imperium.Api_HostAddress}}/weatherforecast/
+Accept: application/json
+
+###
