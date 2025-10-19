@@ -3,16 +3,19 @@ using System;
 using Imperium.Infrastructure;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.EntityFrameworkCore.Infrastructure;
+using Microsoft.EntityFrameworkCore.Migrations;
 using Microsoft.EntityFrameworkCore.Storage.ValueConversion;
 
 #nullable disable
 
-namespace Imperium.Infrastructure.Migrations.Initial
+namespace Imperium.Infrastructure.Migrations.Relationships
 {
     [DbContext(typeof(ImperiumDbContext))]
-    partial class ImperiumDbContextModelSnapshot : ModelSnapshot
+    [Migration("20251019205655_AddRelationships")]
+    partial class AddRelationships
     {
-        protected override void BuildModel(ModelBuilder modelBuilder)
+        /// <inheritdoc />
+        protected override void BuildTargetModel(ModelBuilder modelBuilder)
         {
 #pragma warning disable 612, 618
             modelBuilder.HasAnnotation("ProductVersion", "9.0.10");
@@ -51,7 +54,7 @@ namespace Imperium.Infrastructure.Migrations.Initial
 
                     b.HasKey("Id");
 
-                    b.ToTable("Characters", (string)null);
+                    b.ToTable("Characters");
                 });
 
             modelBuilder.Entity("Imperium.Domain.Models.CrimeRecord", b =>
@@ -73,7 +76,7 @@ namespace Imperium.Infrastructure.Migrations.Initial
 
                     b.HasKey("Id");
 
-                    b.ToTable("CrimeRecords", (string)null);
+                    b.ToTable("CrimeRecords");
                 });
 
             modelBuilder.Entity("Imperium.Domain.Models.EconomySnapshot", b =>
@@ -94,7 +97,7 @@ namespace Imperium.Infrastructure.Migrations.Initial
 
                     b.HasKey("Id");
 
-                    b.ToTable("EconomySnapshots", (string)null);
+                    b.ToTable("EconomySnapshots");
                 });
 
             modelBuilder.Entity("Imperium.Domain.Models.Family", b =>
@@ -116,7 +119,7 @@ namespace Imperium.Infrastructure.Migrations.Initial
 
                     b.HasKey("Id");
 
-                    b.ToTable("Families", (string)null);
+                    b.ToTable("Families");
                 });
 
             modelBuilder.Entity("Imperium.Domain.Models.GameAction", b =>
@@ -138,7 +141,7 @@ namespace Imperium.Infrastructure.Migrations.Initial
 
                     b.HasKey("Id");
 
-                    b.ToTable("GameActions", (string)null);
+                    b.ToTable("GameActions");
                 });
 
             modelBuilder.Entity("Imperium.Domain.Models.GameEvent", b =>
@@ -164,7 +167,7 @@ namespace Imperium.Infrastructure.Migrations.Initial
 
                     b.HasKey("Id");
 
-                    b.ToTable("GameEvents", (string)null);
+                    b.ToTable("GameEvents");
                 });
 
             modelBuilder.Entity("Imperium.Domain.Models.Location", b =>
@@ -182,7 +185,7 @@ namespace Imperium.Infrastructure.Migrations.Initial
 
                     b.HasKey("Id");
 
-                    b.ToTable("Locations", (string)null);
+                    b.ToTable("Locations");
                 });
 
             modelBuilder.Entity("Imperium.Domain.Models.Relationship", b =>
@@ -218,7 +221,7 @@ namespace Imperium.Infrastructure.Migrations.Initial
                     b.HasIndex("SourceId", "TargetId")
                         .IsUnique();
 
-                    b.ToTable("Relationships", (string)null);
+                    b.ToTable("Relationships");
                 });
 
             modelBuilder.Entity("Imperium.Domain.Models.SeasonState", b =>
@@ -245,7 +248,7 @@ namespace Imperium.Infrastructure.Migrations.Initial
 
                     b.HasKey("Id");
 
-                    b.ToTable("SeasonStates", (string)null);
+                    b.ToTable("SeasonStates");
                 });
 
             modelBuilder.Entity("Imperium.Domain.Models.WeatherSnapshot", b =>
@@ -272,7 +275,7 @@ namespace Imperium.Infrastructure.Migrations.Initial
 
                     b.HasKey("Id");
 
-                    b.ToTable("WeatherSnapshots", (string)null);
+                    b.ToTable("WeatherSnapshots");
                 });
 
             modelBuilder.Entity("Imperium.Domain.Models.WorldTime", b =>
@@ -301,7 +304,7 @@ namespace Imperium.Infrastructure.Migrations.Initial
 
                     b.HasKey("Id");
 
-                    b.ToTable("WorldTimes", (string)null);
+                    b.ToTable("WorldTimes");
                 });
 #pragma warning restore 612, 618
         }

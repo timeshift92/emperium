@@ -71,19 +71,18 @@ public class EconomyAgent : IWorldAgent
             Treasury = 1000m
         };
         db.EconomySnapshots.Add(snapshot);
-        db.GameEvents.Add(new GameEvent
+        await db.SaveChangesAsync(ct);
+        metrics.Increment("economy.snapshots");
+        var dispatcher = scopeServices.GetRequiredService<Imperium.Domain.Services.IEventDispatcher>();
+        var ev = new GameEvent
         {
             Id = Guid.NewGuid(),
             Timestamp = DateTime.UtcNow,
             Type = "economy_snapshot",
             Location = "global",
             PayloadJson = JsonSerializer.Serialize(new { snapshotId = snapshot.Id, avgPrecip, descriptionRu = "Снимок экономики: цены по регионам" })
-        });
-
-        await db.SaveChangesAsync(ct);
-        metrics.Increment("economy.snapshots");
-        var ev = db.GameEvents.OrderByDescending(e => e.Timestamp).First();
-        _ = stream.PublishEventAsync(ev);
+        };
+        _ = dispatcher.EnqueueAsync(ev);
 
         // Influence NPCs: mark some characters unhappy if grain price high
     var characters = await db.Characters.OrderBy(c => c.Name).Take(10).ToListAsync(ct);
@@ -119,9 +118,7 @@ public class EconomyAgent : IWorldAgent
                     Location = "global",
                     PayloadJson = JsonSerializer.Serialize(new { from = perLocationPrices.First().Key, to = perLocationPrices.Last().Key, profit = maxPrice - minPrice, descriptionRu = "Транспортная задача: перевезти зерно для получения прибыли" })
                 };
-                db.GameEvents.Add(tj);
-                await db.SaveChangesAsync(ct);
-                _ = stream.PublishEventAsync(tj);
+                _ = dispatcher.EnqueueAsync(tj);
             }
         }
     }

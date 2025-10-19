@@ -54,58 +54,51 @@ public class TimeAgent : IWorldAgent
 
         // Use a transaction so updating world time and emitting events is atomic
         var metrics = scopeServices.GetRequiredService<Imperium.Api.MetricsService>();
-        var stream = scopeServices.GetRequiredService<Imperium.Api.EventStreamService>();
-        await using (var trx = await db.Database.BeginTransactionAsync(ct))
+        var dispatcher = scopeServices.GetRequiredService<Imperium.Domain.Services.IEventDispatcher>();
+
+        // Persist world time update (small write) but don't block on event persistence
+        await db.SaveChangesAsync(ct);
+
+        // Enqueue logical events to be persisted and published by background dispatcher
+        var timeEvent = new GameEvent
         {
-            // Emit tick event
-            db.GameEvents.Add(new GameEvent
+            Id = Guid.NewGuid(),
+            Timestamp = DateTime.UtcNow,
+            Type = "time_tick",
+            Location = "global",
+            PayloadJson = JsonSerializer.Serialize(new { tick = worldTime.Tick, hour = worldTime.Hour, day = worldTime.Day, year = worldTime.Year })
+        };
+        metrics.Increment("time.tick");
+        _ = dispatcher.EnqueueAsync(timeEvent);
+
+        var newDay = worldTime.Tick / ticksPerDay;
+        if (newDay != oldDay)
+        {
+            var dayEvent = new GameEvent
             {
                 Id = Guid.NewGuid(),
                 Timestamp = DateTime.UtcNow,
-                Type = "time_tick",
+                Type = "day_change",
                 Location = "global",
-                PayloadJson = JsonSerializer.Serialize(new { tick = worldTime.Tick, hour = worldTime.Hour, day = worldTime.Day, year = worldTime.Year })
-            });
-            metrics.Increment("time.tick");
+                PayloadJson = JsonSerializer.Serialize(new { day = worldTime.Day, year = worldTime.Year })
+            };
+            metrics.Increment("time.day_change");
+            _ = dispatcher.EnqueueAsync(dayEvent);
+        }
 
-            // If day changed, emit day_change
-            var newDay = worldTime.Tick / ticksPerDay;
-            if (newDay != oldDay)
+        var newYear = worldTime.Tick / ticksPerYear;
+        if (newYear != oldYear)
+        {
+            var yearEvent = new GameEvent
             {
-                db.GameEvents.Add(new GameEvent
-                {
-                    Id = Guid.NewGuid(),
-                    Timestamp = DateTime.UtcNow,
-                    Type = "day_change",
-                    Location = "global",
-                    PayloadJson = JsonSerializer.Serialize(new { day = worldTime.Day, year = worldTime.Year })
-                });
-                metrics.Increment("time.day_change");
-            }
-
-            // If year changed, emit year_change
-            var newYear = worldTime.Tick / ticksPerYear;
-            if (newYear != oldYear)
-            {
-                db.GameEvents.Add(new GameEvent
-                {
-                    Id = Guid.NewGuid(),
-                    Timestamp = DateTime.UtcNow,
-                    Type = "year_change",
-                    Location = "global",
-                    PayloadJson = JsonSerializer.Serialize(new { year = worldTime.Year })
-                });
-                metrics.Increment("time.year_change");
-            }
-
-            await db.SaveChangesAsync(ct);
-            // publish events from this transaction to stream (non-blocking)
-            var savedEvents = await db.GameEvents.OrderByDescending(e => e.Timestamp).Take(10).ToListAsync(ct);
-            foreach (var ev in savedEvents)
-            {
-                _ = stream.PublishEventAsync(ev);
-            }
-            await trx.CommitAsync(ct);
+                Id = Guid.NewGuid(),
+                Timestamp = DateTime.UtcNow,
+                Type = "year_change",
+                Location = "global",
+                PayloadJson = JsonSerializer.Serialize(new { year = worldTime.Year })
+            };
+            metrics.Increment("time.year_change");
+            _ = dispatcher.EnqueueAsync(yearEvent);
         }
     }
 }
