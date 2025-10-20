@@ -7,6 +7,8 @@ type Character = {
   name: string;
   age?: number;
   status?: string;
+  gender?: string;
+  money?: number;
   locationName?: string;
   essence?: string | Record<string, unknown>;
   history?: string;
@@ -35,6 +37,33 @@ type ParsedReply = {
 
 type NpcProfilesProps = {
   className?: string;
+  refreshVersion?: number;
+  focusCharacterId?: string | null;
+  onFocusConsumed?: () => void;
+};
+
+type RelatedSummary = {
+  id: string;
+  name?: string;
+  status?: string;
+  gender?: string;
+  locationName?: string;
+};
+
+type GenealogyRelation = {
+  id: string;
+  details?: RelatedSummary | null;
+};
+
+type GenealogyResponse = {
+  id: string;
+  characterId: string;
+  fatherId?: string | null;
+  father?: RelatedSummary | null;
+  motherId?: string | null;
+  mother?: RelatedSummary | null;
+  spouses: GenealogyRelation[];
+  children: GenealogyRelation[];
 };
 
 function parseJson<T>(value: unknown): T | null {
@@ -87,7 +116,12 @@ function normalizeNpcEvent(ev: RawEvent): ParsedReply {
   return { id, timestamp, reply, moodDelta: Number.isFinite(mood) ? mood : null, meta, raw: payload };
 }
 
-export default function NpcProfiles({ className }: NpcProfilesProps) {
+export default function NpcProfiles({
+  className,
+  refreshVersion = 0,
+  focusCharacterId = null,
+  onFocusConsumed,
+}: NpcProfilesProps) {
   const [chars, setChars] = useState<Character[]>([]);
   const [filter, setFilter] = useState("");
   const [selectedId, setSelectedId] = useState<string | null>(null);
@@ -96,22 +130,69 @@ export default function NpcProfiles({ className }: NpcProfilesProps) {
   const [loadingChars, setLoadingChars] = useState(false);
   const [loadingEvents, setLoadingEvents] = useState(false);
   const [resetting, setResetting] = useState(false);
+  const [genealogy, setGenealogy] = useState<GenealogyResponse | null>(null);
+  const [loadingGenealogy, setLoadingGenealogy] = useState(false);
+  const [genealogyError, setGenealogyError] = useState<string | null>(null);
+  const [inheritance, setInheritance] = useState<any[]>([]);
+  const [loadingInheritance, setLoadingInheritance] = useState(false);
+  const [inventory, setInventory] = useState<{ item: string; quantity: number }[]>([]);
+  const [loadingInventory, setLoadingInventory] = useState(false);
+  const [relations, setRelations] = useState<any[]>([]);
+  const [loadingRelations, setLoadingRelations] = useState(false);
+
+  const handleSelectRelative = (id?: string | null) => {
+    if (!id) return;
+    setSelectedId(id);
+  };
+
+  const relationChip = (id: string, details?: RelatedSummary | null, key?: string) => {
+    const label = details?.name ?? id.slice(0, 8);
+    const meta = details?.status ?? details?.locationName ?? null;
+    return (
+      <button
+        key={key ?? id}
+        type="button"
+        onClick={() => handleSelectRelative(id)}
+        className="flex items-center gap-2 rounded-full border border-slate-200 bg-white px-3 py-1 text-xs text-slate-700 shadow-sm transition hover:border-slate-300 hover:bg-slate-50"
+      >
+        <span className="font-semibold">{label}</span>
+        {meta ? <span className="text-[10px] text-slate-500">{meta}</span> : null}
+      </button>
+    );
+  };
 
   useEffect(() => {
+    let cancelled = false;
     const load = async () => {
       setLoadingChars(true);
       try {
         const res = await fetch("/api/characters");
+        if (!res.ok) throw new Error("characters request failed");
         const data = (await res.json()) as Character[];
-        setChars(data);
+        if (!cancelled) {
+          setChars(data);
+        }
       } catch {
-        setChars([]);
+        if (!cancelled) {
+          setChars([]);
+        }
       } finally {
-        setLoadingChars(false);
+        if (!cancelled) {
+          setLoadingChars(false);
+        }
       }
     };
     load();
-  }, []);
+    return () => {
+      cancelled = true;
+    };
+  }, [refreshVersion]);
+
+  useEffect(() => {
+    if (!focusCharacterId) return;
+    setSelectedId(focusCharacterId);
+    onFocusConsumed?.();
+  }, [focusCharacterId, onFocusConsumed]);
 
   const filtered = useMemo(() => {
     const term = filter.trim().toLowerCase();
@@ -191,36 +272,102 @@ export default function NpcProfiles({ className }: NpcProfilesProps) {
     if (!selectedId) {
       setSelected(null);
       setEvents([]);
+      setGenealogy(null);
+      setGenealogyError(null);
+      setInheritance([]);
       return;
     }
     const load = async () => {
       setLoadingEvents(true);
+      setLoadingGenealogy(true);
+      setLoadingInheritance(true);
       try {
-        const [profileRes, eventsRes] = await Promise.all([
+        const [profileRes, eventsRes, genealogyRes, inheritanceRes] = await Promise.all([
           fetch(`/api/characters/${selectedId}`),
           fetch(`/api/characters/${selectedId}/events?count=50`),
+          fetch(`/api/characters/${selectedId}/genealogy`),
+          fetch(`/api/inheritance-records/by-character/${selectedId}`),
         ]);
+
         if (profileRes.ok) {
           const profile = (await profileRes.json()) as Character;
           setSelected(profile);
         } else {
           setSelected(null);
         }
+
         if (eventsRes.ok) {
           const eventData = (await eventsRes.json()) as RawEvent[];
           setEvents(eventData);
         } else {
           setEvents([]);
         }
+
+        if (genealogyRes.status === 404) {
+          setGenealogy(null);
+          setGenealogyError(null);
+        } else if (genealogyRes.ok) {
+          const genealogyPayload = (await genealogyRes.json()) as GenealogyResponse;
+          setGenealogy(genealogyPayload);
+          setGenealogyError(null);
+        } else {
+          setGenealogy(null);
+          setGenealogyError(`Genealogy error ${genealogyRes.status}`);
+        }
+
+        if (inheritanceRes.ok) {
+          const inh = (await inheritanceRes.json()) as any[];
+          setInheritance(inh);
+        } else {
+          setInheritance([]);
+        }
+
+        // load inventory for character
+        setLoadingInventory(true);
+        try {
+          const invRes = await fetch(`/api/economy/inventory?ownerId=${selectedId}&ownerType=character`);
+          if (invRes.ok) {
+            const inv = (await invRes.json()) as { item?: string; Item?: string; quantity?: number; Quantity?: number }[];
+            const list = inv.map((i) => ({ item: (i.item ?? (i as any).Item) as string, quantity: (i.quantity ?? (i as any).Quantity) as number }));
+            setInventory(list);
+          } else {
+            setInventory([]);
+          }
+        } catch {
+          setInventory([]);
+        } finally {
+          setLoadingInventory(false);
+        }
+
+        // load relationships
+        setLoadingRelations(true);
+        try {
+          const relRes = await fetch(`/api/characters/${selectedId}/relationships`);
+          if (relRes.ok) {
+            const arr = (await relRes.json()) as any[];
+            setRelations(arr);
+          } else {
+            setRelations([]);
+          }
+        } catch {
+          setRelations([]);
+        } finally {
+          setLoadingRelations(false);
+        }
       } catch {
         setSelected(null);
         setEvents([]);
+        setGenealogy(null);
+        setGenealogyError("Genealogy request failed");
+        setInheritance([]);
       } finally {
         setLoadingEvents(false);
+        setLoadingGenealogy(false);
+        setLoadingInheritance(false);
       }
     };
     load();
-  }, [selectedId]);
+  }, [selectedId, refreshVersion]);
 
   const replies = useMemo(
     () => events.map((ev) => normalizeNpcEvent(ev)),
@@ -249,6 +396,8 @@ export default function NpcProfiles({ className }: NpcProfilesProps) {
       setSelectedId(null);
       setSelected(null);
       setEvents([]);
+      setGenealogy(null);
+      setGenealogyError(null);
     } catch {
       // ignore
     } finally {
@@ -328,20 +477,44 @@ export default function NpcProfiles({ className }: NpcProfilesProps) {
             </div>
             {selected && (
               <div className="text-sm text-slate-500">
-                Возраст: {selected.age ?? "—"} · Статус:{" "}
-                {selected.status ?? "—"} · Место:{" "}
-                {selected.locationName ?? "—"}
+                Возраст: {selected.age ?? "—"} · Статус: {selected.status ?? "—"} · Пол: {selected.gender ?? "—"} · Кошелёк: {selected.money != null ? `${selected.money.toFixed ? selected.money.toFixed(2) : selected.money} ¤` : "—"} · Место: {selected.locationName ?? "—"}
               </div>
             )}
           </div>
-          <Button
-            variant="outline"
-            size="sm"
-            onClick={handleReset}
-            disabled={resetting}
-          >
-            {resetting ? "Сброс..." : "Сбросить dev-данные"}
-          </Button>
+          <div className="flex items-center gap-2">
+            <Button
+              variant="outline"
+              size="sm"
+              onClick={handleReset}
+              disabled={resetting}
+            >
+              {resetting ? "Сброс..." : "Сбросить dev-данные"}
+            </Button>
+            {selected?.id && (
+              <Button
+                variant="outline"
+                size="sm"
+                onClick={() => {
+                  const ev = new CustomEvent("imperium:show-character-events", { detail: { id: selected.id } });
+                  window.dispatchEvent(ev);
+                }}
+              >
+                События этого персонажа
+              </Button>
+            )}
+            {selected?.id && (
+              <Button
+                variant="outline"
+                size="sm"
+                onClick={() => {
+                  const ev = new CustomEvent("imperium:focus-character", { detail: { id: selected.id } });
+                  window.dispatchEvent(ev);
+                }}
+              >
+                Фокус персонажа
+              </Button>
+            )}
+          </div>
         </div>
 
         <div className="flex-1 overflow-y-auto px-5 py-4 space-y-6">
@@ -355,7 +528,148 @@ export default function NpcProfiles({ className }: NpcProfilesProps) {
                   {selected.history ?? "Описание отсутствует."}
                 </p>
               </section>
+              <section>
+                <h4 className="text-sm font-semibold text-slate-700">Наследство</h4>
+                {loadingInheritance ? (
+                  <div className="mt-2 text-sm text-slate-500">Загрузка...</div>
+                ) : inheritance.length === 0 ? (
+                  <div className="mt-2 text-sm text-slate-500">Записей нет.</div>
+                ) : (
+                  <ul className="mt-2 space-y-2">
+                    {inheritance.map((r: any) => {
+                      let heirs: string[] = [];
+                      try {
+                        heirs = JSON.parse(r.heirsJson ?? "[]");
+                      } catch {
+                        heirs = [];
+                      }
+                      const resolved = !!r.resolutionJson && r.resolutionJson.length > 2;
+                      const isDeceased = r.deceasedId?.toLowerCase?.() === selectedId?.toLowerCase?.();
+                      return (
+                        <li key={r.id} className="rounded border border-slate-200 bg-white/70 px-3 py-2 text-sm">
+                          <div className="flex flex-wrap items-center justify-between gap-2">
+                            <div className="font-medium text-slate-900">
+                              {new Date(r.createdAt).toLocaleString()}
+                            </div>
+                            <div className={cn("text-xs", resolved ? "text-emerald-600" : "text-slate-500")}>{resolved ? "разрешено" : "ожидает"}</div>
+                          </div>
+                          <div className="mt-1 text-xs text-slate-600">
+                            {isDeceased ? "Умерший" : "Участник"}: {selected?.name}
+                          </div>
+                          <div className="mt-1 text-xs text-slate-600">
+                            Наследники: {heirs.length ? heirs.map((h) => (h === selectedId ? (selected?.name ?? h) : h.slice(0,8))).join(", ") : "—"}
+                          </div>
+                        </li>
+                      );
+                    })}
+                  </ul>
+                )}
+              </section>
 
+              <section>
+                <h4 className="text-sm font-semibold text-slate-700">Инвентарь</h4>
+                {loadingInventory ? (
+                  <div className="mt-2 text-sm text-slate-500">Загрузка...</div>
+                ) : inventory.length === 0 ? (
+                  <div className="mt-2 text-sm text-slate-500">Пусто</div>
+                ) : (
+                  <ul className="mt-2 grid gap-2 md:grid-cols-2">
+                    {inventory.map((it, idx) => (
+                      <li key={`${it.item}-${idx}`} className="flex items-center justify-between rounded border border-slate-200 bg-white/70 px-3 py-2 text-sm">
+                        <span className="text-slate-600">{it.item}</span>
+                        <span className="font-medium text-slate-900">{it.quantity.toFixed ? it.quantity.toFixed(2) : String(it.quantity)}</span>
+                      </li>
+                    ))}
+                  </ul>
+                )}
+              </section>
+
+              <section>
+                <h4 className="text-sm font-semibold text-slate-700">Отношения</h4>
+                {loadingRelations ? (
+                  <div className="mt-2 text-sm text-slate-500">Загрузка...</div>
+                ) : relations.length === 0 ? (
+                  <div className="mt-2 text-sm text-slate-500">Нет записей</div>
+                ) : (
+                  <ul className="mt-2 divide-y divide-slate-200 rounded border border-slate-200 bg-white/70">
+                    {relations.slice(0, 20).map((r, idx) => (
+                      <li key={r.id ?? idx} className="flex items-center justify-between px-3 py-2 text-sm">
+                        <div className="text-slate-700">
+                          {(r.other?.name as string) ?? (r.otherId as string)?.slice(0,8)}
+                          <span className="ml-2 text-xs text-slate-500">{r.type}</span>
+                        </div>
+                        <div className="text-xs text-slate-500">
+                          доверие <span className="font-medium text-slate-900">{r.trust}</span> · симпатия <span className="font-medium text-slate-900">{r.love}</span> · враждебность <span className="font-medium text-slate-900">{r.hostility}</span>
+                        </div>
+                      </li>
+                    ))}
+                  </ul>
+                )}
+              </section>
+
+              <section>
+                <h4 className="text-sm font-semibold text-slate-700">
+                  Genealogy
+                </h4>
+                {loadingGenealogy ? (
+                  <div className="mt-2 text-sm text-slate-500">
+                    Loading genealogy...
+                  </div>
+                ) : genealogyError ? (
+                  <div className="mt-2 text-sm text-red-500">{genealogyError}</div>
+                ) : genealogy ? (
+                  <div className="mt-3 space-y-3 text-sm text-slate-700">
+                    <div className="flex flex-wrap items-center gap-2">
+                      <span className="text-xs uppercase tracking-wide text-slate-400">
+                        Father
+                      </span>
+                      {genealogy.fatherId
+                        ? relationChip(genealogy.fatherId, genealogy.father, "father")
+                        : <span className="text-slate-500">no data</span>}
+                    </div>
+                    <div className="flex flex-wrap items-center gap-2">
+                      <span className="text-xs uppercase tracking-wide text-slate-400">
+                        Mother
+                      </span>
+                      {genealogy.motherId
+                        ? relationChip(genealogy.motherId, genealogy.mother, "mother")
+                        : <span className="text-slate-500">no data</span>}
+                    </div>
+                    <div>
+                      <span className="text-xs uppercase tracking-wide text-slate-400">
+                        Spouses
+                      </span>
+                      {genealogy.spouses.length ? (
+                        <div className="mt-2 flex flex-wrap gap-2">
+                          {genealogy.spouses.map((spouse, idx) =>
+                            relationChip(spouse.id, spouse.details, `spouse-${idx}`),
+                          )}
+                        </div>
+                      ) : (
+                        <div className="mt-2 text-sm text-slate-500">no records</div>
+                      )}
+                    </div>
+                    <div>
+                      <span className="text-xs uppercase tracking-wide text-slate-400">
+                        Children
+                      </span>
+                      {genealogy.children.length ? (
+                        <div className="mt-2 flex flex-wrap gap-2">
+                          {genealogy.children.map((child, idx) =>
+                            relationChip(child.id, child.details, `child-${idx}`),
+                          )}
+                        </div>
+                      ) : (
+                        <div className="mt-2 text-sm text-slate-500">no records</div>
+                      )}
+                    </div>
+                  </div>
+                ) : (
+                  <div className="mt-2 text-sm text-slate-500">
+                    No genealogy data.
+                  </div>
+                )}
+              </section>
               <section>
                 <h4 className="text-sm font-semibold text-slate-700">
                   Характеристики
@@ -506,3 +820,6 @@ export default function NpcProfiles({ className }: NpcProfilesProps) {
     </div>
   );
 }
+
+
+

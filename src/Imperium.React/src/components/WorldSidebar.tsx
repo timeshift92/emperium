@@ -1,3 +1,4 @@
+import { useEffect, useState } from "react";
 import WeatherCard from "@/components/WeatherCard";
 import { cn } from "@/lib/utils";
 import { useLatestEvent } from "@/lib/useLatestEvent";
@@ -50,6 +51,32 @@ export default function WorldSidebar({ className }: WorldSidebarProps) {
     fallbackTypes: ["season_set"],
     refreshMs: 60_000,
   });
+  const [metrics, setMetrics] = useState<Record<string, number>>({});
+  const [metricsError, setMetricsError] = useState<string | null>(null);
+  useEffect(() => {
+    let cancelled = false;
+    let timer: number | null = null;
+    const load = async () => {
+      try {
+        const res = await fetch("/api/metrics");
+        if (!res.ok) throw new Error(String(res.status));
+        const data = (await res.json()) as Record<string, number>;
+        if (!cancelled) {
+          setMetrics(data);
+          setMetricsError(null);
+        }
+      } catch (err) {
+        if (!cancelled) setMetricsError(err instanceof Error ? err.message : "metrics error");
+      } finally {
+        if (!cancelled) timer = window.setTimeout(load, 15000);
+      }
+    };
+    load();
+    return () => {
+      cancelled = true;
+      if (timer) window.clearTimeout(timer);
+    };
+  }, []);
 
   const time = formatTime(timeInfo.payload);
   const season = formatSeason(seasonInfo.payload);
@@ -161,6 +188,36 @@ export default function WorldSidebar({ className }: WorldSidebarProps) {
           <div className="mt-3">
             <WeatherCard />
           </div>
+        </section>
+
+        <section>
+          <div className="text-sm font-semibold text-slate-700">Сводка</div>
+          <div className="mt-3 grid grid-cols-2 gap-2 text-sm">
+            <div className="rounded border border-slate-200 bg-white/80 p-3">
+              <div className="text-xs uppercase tracking-wide text-slate-400">NPC реакции</div>
+              <div className="mt-2 space-y-1 text-slate-700">
+                <div>Всего: {metrics["npc.reactions"] ?? 0}</div>
+                <div className="text-xs text-slate-500">
+                  + поддержка {metrics["npc.reactions.support"] ?? 0}, попытки {metrics["npc.reactions.attempt"] ?? 0}
+                </div>
+              </div>
+            </div>
+            <div className="rounded border border-slate-200 bg-white/80 p-3">
+              <div className="text-xs uppercase tracking-wide text-slate-400">Конфликты</div>
+              <div className="mt-2 text-slate-700">Начато: {metrics["conflict.started"] ?? 0}</div>
+            </div>
+            <div className="rounded border border-slate-200 bg-white/80 p-3">
+              <div className="text-xs uppercase tracking-wide text-slate-400">Наследование</div>
+              <div className="mt-2 text-slate-700">Записей: {metrics["ownership.inheritance_recorded"] ?? 0}</div>
+            </div>
+            <div className="rounded border border-slate-200 bg-white/80 p-3">
+              <div className="text-xs uppercase tracking-wide text-slate-400">Право</div>
+              <div className="mt-2 text-slate-700">Решений: {(metrics["legal.rulings.llm"] ?? 0) + (metrics["legal.rulings.fallback"] ?? 0)}</div>
+            </div>
+          </div>
+          {metricsError && (
+            <div className="mt-2 text-xs text-red-500">metrics: {metricsError}</div>
+          )}
         </section>
       </div>
     </aside>

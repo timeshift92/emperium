@@ -5,6 +5,9 @@ import { cn } from "@/lib/utils";
 
 type EventsListProps = {
   className?: string;
+  initialActiveType?: string;
+  characterIdFilter?: string | null;
+  onClearFilter?: () => void;
 };
 
 type RawEvent = {
@@ -66,9 +69,9 @@ function getTimestampValue(ev: RawEvent) {
   return ts ? Date.parse(ts) : Number.MIN_SAFE_INTEGER;
 }
 
-export default function EventsList({ className }: EventsListProps) {
+export default function EventsList({ className, initialActiveType = "all", characterIdFilter = null, onClearFilter }: EventsListProps) {
   const streamEvents = useSSE<RawEvent>("/api/events/stream");
-  const [activeType, setActiveType] = useState<string>("all");
+  const [activeType, setActiveType] = useState<string>(initialActiveType);
   const [search, setSearch] = useState<string>("");
   const [initialEvents, setInitialEvents] = useState<RawEvent[]>([]);
   const [initialLoading, setInitialLoading] = useState<boolean>(false);
@@ -142,6 +145,10 @@ export default function EventsList({ className }: EventsListProps) {
     const term = search.trim().toLowerCase();
     return normalized.filter((ev) => {
       if (activeType !== "all" && ev.type !== activeType) return false;
+      if (characterIdFilter) {
+        const raw = typeof ev.rawPayload === "string" ? (ev.rawPayload as string) : JSON.stringify(ev.payload ?? {});
+        if (!raw.toLowerCase().includes(characterIdFilter.toLowerCase())) return false;
+      }
       if (!term) return true;
       const haystack = `${ev.type} ${ev.location} ${JSON.stringify(ev.payload)}`;
       return haystack.toLowerCase().includes(term);
@@ -172,6 +179,18 @@ export default function EventsList({ className }: EventsListProps) {
             >
               Все ({normalized.length})
             </Button>
+            <Button
+              variant={activeType === "inheritance_recorded" ? "default" : "outline"}
+              onClick={() => setActiveType((prev) => (prev === "inheritance_recorded" ? "all" : "inheritance_recorded"))}
+            >
+              Наследство (запись)
+            </Button>
+            <Button
+              variant={activeType === "inheritance_resolved" ? "default" : "outline"}
+              onClick={() => setActiveType((prev) => (prev === "inheritance_resolved" ? "all" : "inheritance_resolved"))}
+            >
+              Наследство (резолюция)
+            </Button>
             {types.map((type) => (
               <Button
                 key={type}
@@ -192,6 +211,13 @@ export default function EventsList({ className }: EventsListProps) {
           />
         </div>
       </div>
+
+      {characterIdFilter && (
+        <div className="mb-3 flex items-center gap-2 text-xs text-slate-600">
+          <span className="rounded-full border border-slate-200 bg-white px-2 py-0.5">Фильтр персонажа: {characterIdFilter.slice(0, 8)}…</span>
+          <button type="button" className="underline underline-offset-2 hover:text-slate-900" onClick={onClearFilter}>Сбросить</button>
+        </div>
+      )}
 
       <div className="flex-1 min-h-0 overflow-y-auto pr-1">
         {initialError && (

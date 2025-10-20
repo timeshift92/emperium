@@ -39,6 +39,20 @@ namespace Imperium.Api
                     using var scope = _services.CreateScope();
                     var db = scope.ServiceProvider.GetRequiredService<ImperiumDbContext>();
                     db.GameEvents.Add(ev);
+                    // Ensure payload contains meta.traceId for correlation
+                    try
+                    {
+                        var node = System.Text.Json.JsonSerializer.Deserialize<System.Text.Json.Nodes.JsonNode>(ev.PayloadJson) as System.Text.Json.Nodes.JsonObject;
+                        if (node != null)
+                        {
+                            if (!node.ContainsKey("meta")) node["meta"] = new System.Text.Json.Nodes.JsonObject();
+                            var meta = node["meta"] as System.Text.Json.Nodes.JsonObject;
+                            if (meta != null && !meta.ContainsKey("traceId")) meta["traceId"] = Guid.NewGuid().ToString();
+                            ev.PayloadJson = node.ToJsonString();
+                        }
+                    }
+                    catch { /* ignore payload parse errors */ }
+
                     await db.SaveChangesAsync(stoppingToken);
 
                     // publish to SSE stream (fire-and-forget is ok)

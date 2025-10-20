@@ -19,33 +19,77 @@ public class RoleLlmRouter : ILlmClient
     private readonly IConfiguration _config;
     private readonly LlmOptions _options;
     private readonly ILogger<RoleLlmRouter> _logger;
+    private readonly IFallbackLlmProvider? _fallbackProvider;
 
-    public RoleLlmRouter(IHttpClientFactory httpFactory, IConfiguration config, LlmOptions options, ILogger<RoleLlmRouter> logger)
+    public RoleLlmRouter(IHttpClientFactory httpFactory, IConfiguration config, LlmOptions options, ILogger<RoleLlmRouter> logger, IFallbackLlmProvider? fallbackProvider = null)
     {
         _httpFactory = httpFactory ?? throw new ArgumentNullException(nameof(httpFactory));
         _config = config ?? throw new ArgumentNullException(nameof(config));
         _options = options ?? new LlmOptions();
         _logger = logger ?? throw new ArgumentNullException(nameof(logger));
+        _fallbackProvider = fallbackProvider;
     }
 
     public async Task<string> SendPromptAsync(string prompt, CancellationToken ct = default)
     {
         if (string.IsNullOrWhiteSpace(prompt)) return string.Empty;
+        var traceId = Guid.NewGuid().ToString();
+        using var scope = _logger.BeginScope(new Dictionary<string, object?> { ["TraceId"] = traceId, ["RolePromptHash"] = prompt?.GetHashCode() });
 
-        var (role, cleaned) = ExtractRolePrefix(prompt);
+    var (role, cleaned) = ExtractRolePrefix(prompt!);
         var model = ResolveModelForRole(role) ?? _options.Model;
 
-        _logger.LogInformation("RoleLlmRouter: resolved role='{Role}', model='{Model}', provider='{Provider}'", role ?? "(none)", model, _options.Provider);
+        _logger.LogInformation("RoleLlmRouter: resolved role='{Role}', model='{Model}', provider='{Provider}', traceId={TraceId}", role ?? "(none)", model, _options.Provider, traceId);
 
-        if (_options.Provider.Equals("ollama", StringComparison.OrdinalIgnoreCase))
+        try
         {
-            _logger.LogDebug("RoleLlmRouter: sending prompt to Ollama with model {Model}", model);
-            return await SendToOllamaAsync(cleaned, model, ct);
-        }
+            if (_options.Provider.Equals("ollama", StringComparison.OrdinalIgnoreCase))
+            {
+                _logger.LogDebug("RoleLlmRouter: sending prompt to Ollama with model {Model} traceId={TraceId}", model, traceId);
+                var sw = System.Diagnostics.Stopwatch.StartNew();
+                try
+                {
+                    var resp = await SendToOllamaAsync(cleaned, model, ct);
+                    sw.Stop();
+                    _logger.LogDebug("RoleLlmRouter: Ollama call completed in {ElapsedMs}ms traceId={TraceId}", sw.ElapsedMilliseconds, traceId);
+                    return resp;
+                }
+                catch (Exception ex)
+                {
+                    sw.Stop();
+                    _logger.LogWarning(ex, "RoleLlmRouter: Ollama call failed after {ElapsedMs}ms traceId={TraceId}", sw.ElapsedMilliseconds, traceId);
+                    throw;
+                }
+            }
 
-        _logger.LogDebug("RoleLlmRouter: sending prompt to OpenAI Responses with model {Model}", model);
-        // Default: OpenAI Responses API
-        return await SendToOpenAiResponsesAsync(cleaned, model, _options.Temperature, ct);
+            _logger.LogDebug("RoleLlmRouter: sending prompt to OpenAI Responses with model {Model} traceId={TraceId}", model, traceId);
+            // Default: OpenAI Responses API
+            return await SendToOpenAiResponsesAsync(cleaned, model, _options.Temperature, ct);
+        }
+        catch (Exception ex)
+        {
+            // Protective fallback: if the external LLM provider is unreachable or fails,
+            // fall back to the local MockLlmClient so the simulator remains functional in dev/test.
+            _logger.LogWarning(ex, "RoleLlmRouter: LLM provider call failed for role='{Role}' model='{Model}', falling back to MockLlmClient traceId={TraceId}", role ?? "(none)", model, traceId);
+            try
+            {
+                var fb = _fallbackProvider?.GetFallback();
+                if (fb != null)
+                {
+                    _logger.LogDebug("RoleLlmRouter: using IFallbackLlmProvider-provided fallback traceId={TraceId}", traceId);
+                    return await fb.SendPromptAsync(cleaned, ct);
+                }
+
+                _logger.LogDebug("RoleLlmRouter: no fallback provider available, creating local MockLlmClient traceId={TraceId}", traceId);
+                var mock = new MockLlmClient();
+                return await mock.SendPromptAsync(cleaned, ct);
+            }
+            catch (Exception mex)
+            {
+                _logger.LogError(mex, "RoleLlmRouter: Mock fallback also failed traceId={TraceId}", traceId);
+                throw; // rethrow original failure if mock also fails
+            }
+        }
     }
 
     private static (string? role, string cleanedPrompt) ExtractRolePrefix(string prompt)
