@@ -20,7 +20,7 @@ public class SeasonAgent : IWorldAgent
         var metrics = scopeServices.GetRequiredService<Imperium.Api.MetricsService>();
 
         // get last N snapshots
-        var snaps = await db.WeatherSnapshots.OrderByDescending(s => s.Timestamp).Take(Lookback).ToListAsync(ct);
+    var snaps = await db.WeatherSnapshots.OrderByDescending(s => s.Timestamp).Take(Lookback).ToListAsync();
         if (snaps == null || snaps.Count == 0)
         {
             return; // nothing to compute
@@ -37,7 +37,7 @@ public class SeasonAgent : IWorldAgent
         else season = "Autumn";
 
         // read current season state (singleton)
-    var state = await db.SeasonStates.OrderByDescending(s => s.StartedAt).FirstOrDefaultAsync(ct);
+    var state = await db.SeasonStates.OrderByDescending(s => s.StartedAt).FirstOrDefaultAsync();
         var dispatcher = scopeServices.GetRequiredService<Imperium.Domain.Services.IEventDispatcher>();
         if (state == null)
         {
@@ -51,7 +51,7 @@ public class SeasonAgent : IWorldAgent
                 DurationTicks = 0
             };
             db.SeasonStates.Add(state);
-            await db.SaveChangesAsync(ct);
+            await db.SaveChangesAsync();
             var ev = new GameEvent
             {
                 Id = Guid.NewGuid(),
@@ -83,7 +83,7 @@ public class SeasonAgent : IWorldAgent
                 PayloadJson = JsonSerializer.Serialize(new { season = state.CurrentSeason, avgTemp, avgPrecip })
             };
             metrics.Increment("season.changes");
-            await db.SaveChangesAsync(ct);
+            await db.SaveChangesAsync();
             _ = dispatcher.EnqueueAsync(ev);
             return;
         }
@@ -92,7 +92,7 @@ public class SeasonAgent : IWorldAgent
         state.AverageTemperatureC = avgTemp;
         state.AveragePrecipitationMm = avgPrecip;
         state.DurationTicks += 1;
-        await db.SaveChangesAsync(ct);
+    await db.SaveChangesAsync();
         metrics.Increment("season.ticks");
     }
 }

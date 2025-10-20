@@ -1,0 +1,20 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1024 640">
+  <defs>
+    <linearGradient id="g" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#e9d7a9"/>
+      <stop offset="1" stop-color="#d8b98a"/>
+    </linearGradient>
+    <filter id="noise">
+      <feTurbulence type="fractalNoise" baseFrequency="0.8" numOctaves="2" stitchTiles="stitch"/>
+      <feColorMatrix type="saturate" values="0.1"/>
+      <feBlend mode="multiply" in2="SourceGraphic"/>
+    </filter>
+  </defs>
+  <rect width="1024" height="640" fill="url(#g)"/>
+  <rect width="1000" height="616" x="12" y="12" fill="none" stroke="#7a5a2f" stroke-width="4" opacity="0.6"/>
+  <g opacity="0.12" filter="url(#noise)">
+    <rect width="1024" height="640" fill="#000"/>
+  </g>
+  <text x="62" y="82" font-family="serif" font-size="42" fill="#5b4630">Земли Imperium</text>
+  <text x="62" y="118" font-family="serif" font-size="18" fill="#6b573e" opacity="0.8">Декоративный фон — замените файлом /assets/imperium-map.jpg</text>
+</svg>

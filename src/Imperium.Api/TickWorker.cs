@@ -28,7 +28,27 @@ public class TickWorker : BackgroundService
                 foreach (var a in agents)
                 {
                     _logger.LogInformation("AI Tick: {Agent}", a.Name);
-                    await a.TickAsync(scope.ServiceProvider, stoppingToken);
+
+                    // Give each agent its own short-lived cancellation token so a slow or blocked
+                    // agent won't cancel the whole worker loop. This keeps ticks robust while
+                    // still respecting application shutdown (stoppingToken).
+                    using var agentCts = CancellationTokenSource.CreateLinkedTokenSource(stoppingToken);
+                    // per-agent execution timeout (shorter than full tick) to avoid long blocking
+                    agentCts.CancelAfter(TimeSpan.FromSeconds(15));
+                    try
+                    {
+                        await a.TickAsync(scope.ServiceProvider, agentCts.Token);
+                    }
+                    catch (OperationCanceledException)
+                    {
+                        // Could be a per-agent timeout or application shutdown; treat as non-fatal
+                        _logger.LogWarning("Tick for {Agent} canceled (timeout or shutdown)", a.Name);
+                    }
+                    catch (Exception agEx)
+                    {
+                        // Log agent-level failures but keep the loop running
+                        _logger.LogWarning(agEx, "Agent {Agent} failed", a.Name);
+                    }
                 }
             }
             catch (Exception ex)

@@ -100,6 +100,18 @@ public class WeatherAgent : IWorldAgent
                 PayloadJson = System.Text.Json.JsonSerializer.Serialize(new { snapshotId = snap.Id, condition = snap.Condition, temperatureC = snap.TemperatureC })
             };
             _ = dispatcher.EnqueueAsync(ev);
+
+            // Apply economy shocks based on precipitation extremes
+            var state = scopeServices.GetRequiredService<Imperium.Api.EconomyStateService>();
+            // drought -> grain up 20% for 1 hour; heavy rain -> grain down 10% for 1 hour
+            if (snap.PrecipitationMm < 1.0)
+            {
+                state.SetShock("grain", 1.20m, DateTime.UtcNow.AddHours(1));
+            }
+            else if (snap.PrecipitationMm > 5.0)
+            {
+                state.SetShock("grain", 0.90m, DateTime.UtcNow.AddHours(1));
+            }
         }
         catch (Exception ex)
         {

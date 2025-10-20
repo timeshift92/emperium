@@ -1,3 +1,5 @@
+using System.Collections.Generic;
+using System.Linq;
 using System.Text.Json;
 using Imperium.Domain.Agents;
 using Imperium.Domain.Models;
@@ -5,6 +7,7 @@ using Imperium.Domain.Services;
 using Imperium.Infrastructure;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.DependencyInjection;
+using System.Text.Json.Nodes;
 
 namespace Imperium.Api.Agents;
 
@@ -25,10 +28,105 @@ public class RelationshipAgent : IWorldAgent
         var dispatcher = scopeServices.GetRequiredService<IEventDispatcher>();
         var metrics = scopeServices.GetRequiredService<MetricsService>();
 
+        static string AddGuidToJsonArray(string? json, Guid id)
+        {
+            try
+            {
+                var node = JsonNode.Parse(string.IsNullOrWhiteSpace(json) ? "[]" : json) as JsonArray ?? new JsonArray();
+                var exists = node.Any(x => Guid.TryParse(x?.ToString(), out var g) && g == id);
+                if (!exists)
+                {
+                    node.Add(id.ToString());
+                }
+                return node.ToJsonString();
+            }
+            catch
+            {
+                return JsonSerializer.Serialize(new[] { id });
+            }
+        }
+
+        static (Character first, Character second) OrderPair(Character a, Character b)
+        {
+            return string.Compare(a.Name, b.Name, StringComparison.Ordinal) <= 0 ? (a, b) : (b, a);
+        }
+
+        async Task<GenealogyRecord> GetOrCreateGenealogyAsync(Guid characterId)
+        {
+                var record = await db.GenealogyRecords.FirstOrDefaultAsync(g => g.CharacterId == characterId);
+            if (record == null)
+            {
+                record = new GenealogyRecord
+                {
+                    Id = Guid.NewGuid(),
+                    CharacterId = characterId,
+                    SpouseIdsJson = "[]",
+                    ChildrenIdsJson = "[]"
+                };
+                db.GenealogyRecords.Add(record);
+            }
+            return record;
+        }
+
+        async Task<Household> EnsureHouseholdForPairAsync(Character a, Character b)
+        {
+            var (first, second) = OrderPair(a, b);
+            var name = $"{first.Name}-{second.Name} Household";
+            var household = await db.Households.FirstOrDefaultAsync(h => h.Name == name);
+            if (household == null)
+            {
+                household = new Household
+                {
+                    Id = Guid.NewGuid(),
+                    Name = name,
+                    LocationId = first.LocationId ?? second.LocationId,
+                    HeadId = first.Id,
+                    MemberIdsJson = "[]",
+                    Wealth = 0m
+                };
+                db.Households.Add(household);
+            }
+
+            household.MemberIdsJson = AddGuidToJsonArray(household.MemberIdsJson, first.Id);
+            household.MemberIdsJson = AddGuidToJsonArray(household.MemberIdsJson, second.Id);
+            return household;
+        }
+
+        async Task<Family> EnsureFamilyForHouseholdAsync(Household household)
+        {
+            var family = await db.Families.FirstOrDefaultAsync(f => f.Name == household.Name);
+            if (family == null)
+            {
+                family = new Family
+                {
+                    Id = Guid.NewGuid(),
+                    Name = household.Name,
+                    MemberIds = new List<Guid>(),
+                    Wealth = household.Wealth
+                };
+                db.Families.Add(family);
+            }
+
+            family.MemberIds ??= new List<Guid>();
+            return family;
+        }
+
+        static void EnsureFamilyMembers(Family family, params Guid[] memberIds)
+        {
+            foreach (var member in memberIds)
+            {
+                if (member == Guid.Empty) continue;
+                if (!family.MemberIds.Contains(member))
+                {
+                    family.MemberIds.Add(member);
+                }
+            }
+        }
+
         var characters = await db.Characters
             .OrderBy(c => c.Name)
             .Take(MaxSample)
-            .ToListAsync(ct);
+            .ToListAsync();
 
         if (characters.Count < 2)
         {
@@ -38,7 +136,7 @@ public class RelationshipAgent : IWorldAgent
         var ids = characters.Select(c => c.Id).ToList();
         var relations = await db.Relationships
             .Where(r => ids.Contains(r.SourceId) && ids.Contains(r.TargetId))
-            .ToListAsync(ct);
+            .ToListAsync();
 
         var random = Random.Shared;
         var producedEvents = new List<GameEvent>();
@@ -127,6 +225,17 @@ public class RelationshipAgent : IWorldAgent
                     };
                     producedEvents.Add(marriage);
                     metrics.Increment("relationships.marriage");
+
+                    var household = await EnsureHouseholdForPairAsync(a, b);
+                    var family = await EnsureFamilyForHouseholdAsync(household);
+                    EnsureFamilyMembers(family, a.Id, b.Id);
+                    family.Wealth = household.Wealth;
+
+                    var recordA = await GetOrCreateGenealogyAsync(a.Id);
+                    recordA.SpouseIdsJson = AddGuidToJsonArray(recordA.SpouseIdsJson, b.Id);
+
+                    var recordB = await GetOrCreateGenealogyAsync(b.Id);
+                    recordB.SpouseIdsJson = AddGuidToJsonArray(recordB.SpouseIdsJson, a.Id);
                 }
             }
 
@@ -160,34 +269,68 @@ public class RelationshipAgent : IWorldAgent
             }
 
             // Рождение ребёнка только для супружеских пар
-            if (relAB.Type == "married" && relBA.Type == "married")
+                    if (relAB.Type == "married" && relBA.Type == "married")
+        {
+            if (relAB.Love >= 80 && relBA.Love >= 80 && random.NextDouble() < 0.03)
             {
-                if (relAB.Love >= 80 && relBA.Love >= 80 && random.NextDouble() < 0.03)
-                {
-                    relAB.Trust = Clamp(relAB.Trust + 5);
-                    relBA.Trust = Clamp(relBA.Trust + 5);
+                relAB.Trust = Clamp(relAB.Trust + 5);
+                relBA.Trust = Clamp(relBA.Trust + 5);
 
-                    var child = new GameEvent
+                var (orderedA, orderedB) = OrderPair(a, b);
+                var household = await EnsureHouseholdForPairAsync(orderedA, orderedB);
+                var family = await EnsureFamilyForHouseholdAsync(household);
+
+                var childId = Guid.NewGuid();
+                var childName = $"{orderedA.Name.Split(' ')[0]}-{orderedB.Name.Split(' ')[0]} child";
+                var newborn = new Character
+                {
+                    Id = childId,
+                    Name = childName,
+                    Age = 0,
+                    Status = "infant",
+                    LocationId = orderedA.LocationId ?? orderedB.LocationId,
+                    LocationName = orderedA.LocationName ?? orderedB.LocationName,
+                    History = $"Child of {orderedA.Name} and {orderedB.Name}"
+                };
+                db.Characters.Add(newborn);
+
+                household.MemberIdsJson = AddGuidToJsonArray(household.MemberIdsJson, childId);
+                EnsureFamilyMembers(family, childId);
+                family.Wealth = household.Wealth;
+
+                var parentARecord = await GetOrCreateGenealogyAsync(orderedA.Id);
+                parentARecord.ChildrenIdsJson = AddGuidToJsonArray(parentARecord.ChildrenIdsJson, childId);
+
+                var parentBRecord = await GetOrCreateGenealogyAsync(orderedB.Id);
+                parentBRecord.ChildrenIdsJson = AddGuidToJsonArray(parentBRecord.ChildrenIdsJson, childId);
+
+                var childRecord = await GetOrCreateGenealogyAsync(childId);
+                childRecord.FatherId = orderedA.Id;
+                childRecord.MotherId = orderedB.Id;
+
+                var birthEvent = new GameEvent
+                {
+                    Id = Guid.NewGuid(),
+                    Timestamp = DateTime.UtcNow,
+                    Type = "child_birth",
+                    Location = orderedA.LocationName ?? "global",
+                    PayloadJson = JsonSerializer.Serialize(new
                     {
-                        Id = Guid.NewGuid(),
-                        Timestamp = DateTime.UtcNow,
-                        Type = "child_birth",
-                        Location = a.LocationName ?? "global",
-                        PayloadJson = JsonSerializer.Serialize(new
-                        {
-                            parentA = a.Id,
-                            parentB = b.Id,
-                            familyName = a.LocationName ?? "не указан",
-                            joy = Math.Min(relAB.Love, relBA.Love)
-                        })
-                    };
-                    producedEvents.Add(child);
-                    metrics.Increment("relationships.child_birth");
-                }
+                        parentA = orderedA.Id,
+                        parentB = orderedB.Id,
+                        childId,
+                        childName,
+                        familyName = orderedA.LocationName ?? "family",
+                        joy = Math.Min(relAB.Love, relBA.Love)
+                    })
+                };
+                producedEvents.Add(birthEvent);
+                metrics.Increment("relationships.child_birth");
             }
         }
+        }
 
-        await db.SaveChangesAsync(ct);
+    await db.SaveChangesAsync();
 
         foreach (var ev in producedEvents)
         {
@@ -195,3 +338,4 @@ public class RelationshipAgent : IWorldAgent
         }
     }
 }
+
