@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from "react";
-import { useSSE } from "@/lib/useSSE";
+import { useEvents } from "@/lib/useEvents";
 import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
 
@@ -70,7 +70,7 @@ function getTimestampValue(ev: RawEvent) {
 }
 
 export default function EventsList({ className, initialActiveType = "all", characterIdFilter = null, onClearFilter }: EventsListProps) {
-  const streamEvents = useSSE<RawEvent>("/api/events/stream");
+  const { events: streamEvents } = useEvents();
   const [activeType, setActiveType] = useState<string>(initialActiveType);
   const [search, setSearch] = useState<string>("");
   const [initialEvents, setInitialEvents] = useState<RawEvent[]>([]);

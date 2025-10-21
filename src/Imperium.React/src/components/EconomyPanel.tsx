@@ -1,5 +1,7 @@
 import { cn } from "@/lib/utils";
 import { useLatestEvent } from "@/lib/useLatestEvent";
+import { useEvents } from "@/lib/useEvents";
+import eventsClient from "@/lib/eventsClient";
 import { useEffect, useMemo, useState } from "react";
 
 type EconomyPanelProps = {
@@ -8,6 +10,18 @@ type EconomyPanelProps = {
 
 export default function EconomyPanel({ className }: EconomyPanelProps) {
   const snapshot = useLatestEvent("economy_snapshot", { refreshMs: 45_000 });
+  const { events: streamEvents } = useEvents();
+  const [snapshotOverride, setSnapshotOverride] = useState<any | null>(null);
+
+  useEffect(() => {
+    for (const ev of streamEvents) {
+      const type = ev?.Type ?? ev?.type;
+      if (type === "economy_snapshot") {
+        // push the latest snapshot into local override so UI updates immediately
+        setSnapshotOverride(ev);
+      }
+    }
+  }, [streamEvents]);
   const transport = useLatestEvent("transport_job", { refreshMs: 45_000 });
 
   const [orders, setOrders] = useState<any[]>([]);
@@ -69,9 +83,9 @@ export default function EconomyPanel({ className }: EconomyPanelProps) {
   }, []);
 
   // Load order book and trades
+  // utility: load orderbook and trades for current selection
   useEffect(() => {
     let cancelled = false;
-    let timer: number | null = null;
     const load = async () => {
       if (cancelled) return;
       setLoadingBook(true);
@@ -93,15 +107,73 @@ export default function EconomyPanel({ className }: EconomyPanelProps) {
         if (!cancelled) setErrorBook(err instanceof Error ? err.message : "Ошибка загрузки стакана");
       } finally {
         if (!cancelled) setLoadingBook(false);
-        if (!cancelled) timer = window.setTimeout(load, 15000);
       }
     };
     load();
     return () => {
       cancelled = true;
-      if (timer) window.clearTimeout(timer);
     };
   }, [selectedLocation, selectedItem]);
+
+  // Live refresh orderbook/trades on stream events (debounced & filtered)
+  useEffect(() => {
+    let debounce: number | null = null;
+    const handler = (ev: any) => {
+      try {
+        const payloadRaw = ev?.PayloadJson ?? ev?.payload ?? ev?.Payload ?? null;
+        let payload: any = payloadRaw;
+        if (typeof payloadRaw === 'string') {
+          try { payload = JSON.parse(payloadRaw); } catch { payload = null; }
+        }
+        const evItem = payload?.item ?? payload?.Item ?? undefined;
+        const evLoc = payload?.location ?? payload?.Location ?? undefined;
+        if (evItem && evItem !== selectedItem) return; // skip other items
+        if (evLoc && selectedLocation !== 'all' && evLoc !== selectedLocation) return; // skip other locations
+        if (debounce) window.clearTimeout(debounce);
+        debounce = window.setTimeout(() => {
+          // call loader by toggling selectedItem (cheap) — but better to call fetch directly
+          (async () => {
+            setLoadingBook(true);
+            try {
+              const locParam = selectedLocation !== "all" ? `&locationId=${selectedLocation}` : "";
+              const itemParam = `item=${encodeURIComponent(selectedItem)}`;
+              const [rOrders, rTrades] = await Promise.all([
+                fetch(`/api/economy/orders?${itemParam}${locParam}`),
+                fetch(`/api/economy/trades?${itemParam}${locParam}`),
+              ]);
+              const o = (await rOrders.json()).slice(0, 100);
+              const t = (await rTrades.json()).slice(0, 50);
+              setOrders(Array.isArray(o) ? o : []);
+              setTrades(Array.isArray(t) ? t : []);
+            } catch {}
+            finally { setLoadingBook(false); }
+          })();
+        }, 350);
+      } catch {}
+    };
+    const off1 = eventsClient.onEvent('order_placed', handler);
+    const off2 = eventsClient.onEvent('trade_executed', handler);
+    return () => {
+      off1(); off2(); if (debounce) window.clearTimeout(debounce);
+    };
+  }, [selectedLocation, selectedItem]);
+
+  // Live refresh orderbook/trades on stream events
+  useEffect(() => {
+    let debounce: number | null = null;
+    const onEvent = (ev: any) => {
+      const type = ev?.Type ?? ev?.type;
+      if (type === 'order_placed' || type === 'trade_executed') {
+        if (debounce) window.clearTimeout(debounce);
+        debounce = window.setTimeout(() => {
+          // trigger existing effect reload by toggling selectedItem (cheap hack)
+          setSelectedItem((s) => s);
+        }, 300);
+      }
+    };
+    const offAll = eventsClient.onEvent('*', onEvent);
+    return () => { offAll(); if (debounce) window.clearTimeout(debounce); };
+  }, []);
 
   // Aggregate per location for selected item
   useEffect(() => {
@@ -128,9 +200,10 @@ export default function EconomyPanel({ className }: EconomyPanelProps) {
   const bids = useMemo(() => orders.filter(o => o.side === "buy" || o.Side === "buy").sort((a,b)=> (b.price ?? b.Price) - (a.price ?? a.Price)).slice(0,10), [orders]);
   const asks = useMemo(() => orders.filter(o => o.side === "sell" || o.Side === "sell").sort((a,b)=> (a.price ?? a.Price) - (b.price ?? b.Price)).slice(0,10), [orders]);
 
+  const liveSnapshot = snapshotOverride ?? snapshot.event;
   const payload =
-    snapshot.payload && typeof snapshot.payload === "object"
-      ? (snapshot.payload as Record<string, unknown>)
+    (liveSnapshot?.payload ?? liveSnapshot?.PayloadJson ?? liveSnapshot?.Payload) && typeof (liveSnapshot?.payload ?? liveSnapshot?.PayloadJson ?? liveSnapshot?.Payload) === "object"
+      ? ((liveSnapshot?.payload ?? liveSnapshot?.PayloadJson ?? liveSnapshot?.Payload) as Record<string, unknown>)
       : undefined;
 
   const transportPayload =

@@ -9,6 +9,7 @@ import HouseholdsPanel from "@/components/HouseholdsPanel";
 import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
 import InheritancePanel from "@/components/InheritancePanel";
+import eventsClient from "@/lib/eventsClient";
 
 type TabKey = "events" | "characters" | "economy" | "households" | "inheritance" | "focus";
 
@@ -72,6 +73,14 @@ function App() {
     const timer = window.setTimeout(() => setStatus(null), 5_000);
     return () => window.clearTimeout(timer);
   }, [status]);
+
+  useEffect(() => {
+    // attempt to start SignalR connection on app boot
+    eventsClient.start().catch(() => {
+      // ignore start errors; fallback will be used
+    });
+    return () => eventsClient.stop();
+  }, []);
 
   useEffect(() => {
     if (!toast) return;

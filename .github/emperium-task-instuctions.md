@@ -147,6 +147,8 @@
   - `MetricsService`: кольцевой буфер длительностей тиков и LLM, REST-срез `/api/metrics/ticks`, гистограмма `imperium_llm_duration_ms`, счётчики `llm.requests/success/errors/canceled`.
   - `LlmMetricsDecorator` + `TickWorker`: OpenTelemetry Activity (`Imperium.Llm`, `Imperium.TickWorker`) с метками успехов/ошибок агентов и длительностями.
   - `EconomyStateService`: расширенный сид-список (~100 товаров) подхватывается из `appsettings.json` (`Economy.Items`), обновлена документация.
+  - `EconomyItemDefinition`: добавлены поля `weightPerUnit`, `perishableDays`, `stackSize`, `category` и валидация на API.
+  - Frontend: добавлена панель `ItemDefsPanel` в `EconomyPanel` для просмотра/редактирования определений товаров.
 
   - `TimeAgent`/WorldTime: добавлены вычисляемые поля `Month` и `DayOfMonth`; `time_tick` теперь содержит `month` и `dayOfMonth`, добавлено событие `month_change`.
   - Dev endpoints: `/api/dev/tick-now` поддерживает параметр `advanceTime` и возвращает `worldTime`; добавлен `POST /api/dev/tick-time` для прогонки только TimeAI.
@@ -210,7 +212,7 @@
 - [x] Интеграция: `EconomyAgent` и `ConsumptionAgent` используют `BasePrice` и `ConsumptionPerTick`
 - [x] Документация: README + docs/Chapters/08_Economy_Items_and_Definitions.md
 - [x] Seed-список ~100 товаров в `Economy.Items` (`appsettings.json`) с авто-загрузкой в `EconomyStateService`
-- [ ] Расширение определений: `weight`, `perishableDays`, `stackSize`, `category`
+- [x] Расширение определений: `weight`, `perishableDays`, `stackSize`, `category`
 - [ ] UI: панель для просмотра и редактирования определений (React)
 - [ ] Тесты: unit-тесты для `EconomyStateService` и API-эндпоинтов `item-defs`
 - [ ] Метрики: экспорт по товарам (торги, запасы, оборот) в `/api/metrics`

@@ -1,0 +1,37 @@
+import { useEffect, useState } from "react";
+import eventsClient from "./eventsClient";
+
+export type RawEvent = Record<string, any>;
+
+export function useEvents() {
+  const [events, setEvents] = useState<RawEvent[]>([]);
+  useEffect(() => {
+    let mounted = true;
+    const handle = (ev: RawEvent) => {
+      if (!mounted) return;
+      setEvents((prev) => [ev, ...prev].slice(0, 500));
+    };
+    // generic subscribe for all events
+    const off = eventsClient.onEvent("*", handle);
+    // try to connect
+    eventsClient.start().catch(() => {});
+    return () => {
+      mounted = false;
+      off();
+    };
+  }, []);
+
+  return {
+    events,
+  };
+}
+
+export function useWeather(initial?: any) {
+  const [weather, setWeather] = useState(initial ?? null);
+  useEffect(() => {
+    const off = eventsClient.onWeather((w) => setWeather(w));
+    eventsClient.start().catch(() => {});
+    return () => off();
+  }, []);
+  return weather;
+}

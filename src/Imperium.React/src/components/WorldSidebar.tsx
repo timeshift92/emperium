@@ -2,6 +2,8 @@ import { useEffect, useMemo, useState } from "react";
 import WeatherCard from "@/components/WeatherCard";
 import { cn } from "@/lib/utils";
 import { useLatestEvent } from "@/lib/useLatestEvent";
+import eventsClient from "@/lib/eventsClient";
+import { useWeather } from "@/lib/useEvents";
 
 type WorldSidebarProps = {
   className?: string;
@@ -55,6 +57,7 @@ export default function WorldSidebar({ className }: WorldSidebarProps) {
     fallbackTypes: ["season_set"],
     refreshMs: 60_000,
   });
+  const liveWeather = useWeather(null);
   const [metrics, setMetrics] = useState<Record<string, number>>({});
   const [metricsError, setMetricsError] = useState<string | null>(null);
   const [tickMetrics, setTickMetrics] = useState<{
@@ -63,6 +66,7 @@ export default function WorldSidebar({ className }: WorldSidebarProps) {
     lastMs: number;
   } | null>(null);
   const [tickMetricsError, setTickMetricsError] = useState<string | null>(null);
+  const [connected, setConnected] = useState<boolean | null>(null);
   useEffect(() => {
     let cancelled = false;
     let timer: number | null = null;
@@ -86,6 +90,11 @@ export default function WorldSidebar({ className }: WorldSidebarProps) {
       cancelled = true;
       if (timer) window.clearTimeout(timer);
     };
+  }, []);
+
+  useEffect(() => {
+    const off = eventsClient.onConnectionChange((c: boolean) => setConnected(c));
+    return () => off();
   }, []);
 
   useEffect(() => {
@@ -122,7 +131,7 @@ export default function WorldSidebar({ className }: WorldSidebarProps) {
   }, []);
 
   const time = formatTime(timeInfo.payload);
-  const season = formatSeason(seasonInfo.payload);
+  const season = formatSeason(seasonInfo.payload ?? liveWeather);
   const sparklinePoints = useMemo(() => {
     if (!tickMetrics || tickMetrics.durationsMs.length === 0) return "";
     const values = tickMetrics.durationsMs;
@@ -155,6 +164,9 @@ export default function WorldSidebar({ className }: WorldSidebarProps) {
         <div className="mt-2 text-lg font-semibold text-slate-900">
           Imperium — живой тик
         </div>
+          <div className="mt-1 text-xs text-slate-400">
+            <span className={connected ? "text-emerald-600" : "text-rose-500"}>{connected === null ? 'подключение...' : connected ? 'онлайн' : 'fallback: SSE'}</span>
+          </div>
       </div>
 
       <div className="flex-1 overflow-y-auto px-5 py-4 space-y-6">
