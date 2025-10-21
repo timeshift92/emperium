@@ -230,3 +230,21 @@ VALUES ('20251020093815_ReservationsWalletsTreasury', '9.0.10');
 
 COMMIT;
 
+-- Migration: 20251021_AddTradeRoutesAndFactionFields
+BEGIN TRANSACTION;
+ALTER TABLE "Factions" ADD "ParentFactionId" TEXT NULL;
+ALTER TABLE "Factions" ADD "TaxPolicyJson" TEXT NULL;
+ALTER TABLE "Factions" ADD "LocationId" TEXT NULL;
+
+CREATE TABLE IF NOT EXISTS "TradeRoutes" (
+    "Id" TEXT NOT NULL CONSTRAINT "PK_TradeRoutes" PRIMARY KEY,
+    "FromLocationId" TEXT NOT NULL,
+    "ToLocationId" TEXT NOT NULL,
+    "OwnerFactionId" TEXT NOT NULL,
+    "Toll" TEXT NOT NULL,
+    "Transport" TEXT NULL
+);
+
+INSERT INTO "__EFMigrationsHistory" ("MigrationId", "ProductVersion") VALUES ('20251021120000_AddTradeRoutesAndFactionFields', '9.0.10');
+COMMIT;
+

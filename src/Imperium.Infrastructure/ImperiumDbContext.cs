@@ -34,6 +34,8 @@ public class ImperiumDbContext : DbContext
     public DbSet<Imperium.Domain.Models.Inventory> Inventories { get; set; } = null!;
     public DbSet<Imperium.Domain.Models.MarketOrder> MarketOrders { get; set; } = null!;
     public DbSet<Imperium.Domain.Models.Trade> Trades { get; set; } = null!;
+    public DbSet<Imperium.Domain.Models.TradeRoute> TradeRoutes { get; set; } = null!;
+    public DbSet<Imperium.Domain.Models.Army> Army { get; set; } = null!;
     public DbSet<Imperium.Domain.Models.InheritanceRecord> InheritanceRecords { get; set; } = null!;
     public DbSet<Ownership> Ownerships { get; set; } = null!;
     public DbSet<NpcMemory> NpcMemories { get; set; } = null!;
@@ -48,11 +50,13 @@ public class ImperiumDbContext : DbContext
     modelBuilder.Entity<GenealogyRecord>().HasKey(g => g.Id);
     modelBuilder.Entity<Imperium.Domain.Models.InheritanceRecord>().HasKey(i => i.Id);
         modelBuilder.Entity<Relationship>().HasIndex(r => new { r.SourceId, r.TargetId }).IsUnique();
+    modelBuilder.Entity<Imperium.Domain.Models.Army>().HasKey(a => a.Id);
         modelBuilder.Entity<Ownership>().HasKey(o => o.Id);
         modelBuilder.Entity<NpcMemory>().HasKey(m => m.Id);
         modelBuilder.Entity<Imperium.Domain.Models.Inventory>().HasKey(i => i.Id);
         modelBuilder.Entity<Imperium.Domain.Models.MarketOrder>().HasKey(o => o.Id);
         modelBuilder.Entity<Imperium.Domain.Models.Trade>().HasKey(t => t.Id);
+    modelBuilder.Entity<Imperium.Domain.Models.TradeRoute>().HasKey(r => r.Id);
         modelBuilder.Entity<Imperium.Domain.Models.MarketOrder>().HasIndex(o => new { o.LocationId, o.Item, o.Side, o.Price });
 
         var guidListConverter = new ValueConverter<List<Guid>, string>(

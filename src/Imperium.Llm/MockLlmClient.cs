@@ -11,7 +11,7 @@ public class MockLlmClient : ILlmClient
     }
     public Task<string> SendPromptAsync(string prompt, CancellationToken ct = default)
     {
-        if (!string.IsNullOrEmpty(_response) && (prompt?.ToLowerInvariant().Contains("npc") == true || prompt?.ToLowerInvariant().Contains("персонаж") == true))
+        if (!string.IsNullOrEmpty(_response))
         {
             return Task.FromResult(_response);
         }

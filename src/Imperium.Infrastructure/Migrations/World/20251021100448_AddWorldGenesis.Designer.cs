@@ -364,6 +364,9 @@ namespace Imperium.Infrastructure.Migrations.World
                     b.Property<string>("Culture")
                         .IsRequired()
                         .HasColumnType("TEXT");
+                    b.Property<string>("Biome")
+                        .IsRequired()
+                        .HasColumnType("TEXT");
 
                     b.Property<double?>("Latitude")
                         .HasColumnType("REAL");

@@ -186,8 +186,10 @@ public class NpcReplyQueueService : BackgroundService, INpcReplyQueue
         var tasks = new List<Task>();
         var sem = new SemaphoreSlim(_maxConcurrency);
 
-        await foreach (var req in _channel.Reader.ReadAllAsync(stoppingToken))
+        try
         {
+            await foreach (var req in _channel.Reader.ReadAllAsync(stoppingToken))
+            {
             await sem.WaitAsync(stoppingToken);
             tasks.Add(Task.Run(async () =>
             {
@@ -311,6 +313,12 @@ public class NpcReplyQueueService : BackgroundService, INpcReplyQueue
                     sem.Release();
                 }
             }, CancellationToken.None));
+            }
+        }
+        catch (OperationCanceledException)
+        {
+            // graceful shutdown, no need to stop the host
+            _logger.LogInformation("NpcReplyQueueService: cancellation requested, shutting down gracefully");
         }
 
         try
