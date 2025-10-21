@@ -1,6 +1,7 @@
 using Imperium.Domain.Agents;
 using Imperium.Infrastructure;
 using Imperium.Domain.Models;
+using Imperium.Domain.Utils;
 using Imperium.Llm;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.EntityFrameworkCore;
@@ -117,147 +118,17 @@ public class NpcAgent : IWorldAgent
             }
 
             string archetype = InferArchetype(ch.SkillsJson);
-            string prompt = BuildPrompt(ch, archetype);
 
             try
             {
+                var replyQueue = scope.GetRequiredService<Imperium.Api.Services.INpcReplyQueue>();
                 var metrics = scope.GetService<Imperium.Api.MetricsService>();
-                string? raw = null;
-                // Меньше попыток — быстрее тики в dev-режиме
-                const int maxAttempts = 2;
-                int reasksPerformed = 0;
-                int sanitizations = 0;
-
-                for (int attempt = 1; attempt <= maxAttempts; attempt++)
-                {
-                    // Первая попытка — основной промпт, остальные — уточнения
-                    if (attempt == 1)
-                        raw = await CallLlmWithTimeoutAsync(llm, prompt, ct);
-                    else
-                    {
-                        reasksPerformed++;
-                        raw = await CallLlmWithTimeoutAsync(llm, ReaskPrompt(), ct);
-                    }
-
-                    if (string.IsNullOrWhiteSpace(raw))
-                        continue;
-
-                    // Если в ответе латиница (англ. буквы) — чаще всего модель утекла в технический режим -> reask
-                    if (IsSignificantLatinOrTechnical(raw) && attempt < maxAttempts)
-                    {
-                        _logger?.LogInformation("NpcAgent: latin detected in raw reply for {Character} — reasking", ch.Name);
-                        continue;
-                    }
-
-                    // Проверка на современные слова
-                    if (HasForbiddenTokens(raw, forbidden) && attempt < maxAttempts)
-                    {
-                        _logger?.LogInformation("NpcAgent: forbidden tokens detected in raw reply for {Character} — reasking", ch.Name);
-                        continue;
-                    }
-
-                    // Попытка распарсить JSON
-                    if (TryParseNpcReply(raw, out var reply, out var mood))
-                    {
-                        // Если в reply есть латиница или запрещённые токены на последней попытке — попробуем rewrite
-                        if ((IsSignificantLatinOrTechnical(reply) || HasForbiddenTokens(reply, forbidden)) && attempt < maxAttempts)
-                        {
-                            _logger?.LogInformation("NpcAgent: reply contains latin/forbidden on attempt {Attempt} for {Character}", attempt, ch.Name);
-                            continue;
-                        }
-
-                        if ((IsSignificantLatinOrTechnical(reply) || HasForbiddenTokens(reply, forbidden)) && attempt == maxAttempts)
-                        {
-                            // финальная попытка: просим LLM переформулировать reply как архаичный русский
-                            try
-                            {
-                                var rewritePrompt = BuildRewritePrompt(reply);
-                                var rewritten = await CallLlmWithTimeoutAsync(llm, rewritePrompt, ct);
-                                if (!string.IsNullOrWhiteSpace(rewritten) && TryParseNpcReply(rewritten, out var newReply, out var newMood))
-                                {
-                                    reply = newReply;
-                                    mood = newMood ?? mood; // prefer rewritten mood if provided
-                                    sanitizations++;
-                                }
-                            }
-                            catch (Exception ex)
-                            {
-                                _logger?.LogWarning(ex, "NpcAgent: rewrite failed for {Character}", ch.Name);
-                            }
-                        }
-
-                        if (HasForbiddenTokens(reply, forbidden))
-                        {
-                            reply = SanitizeReply(reply, forbidden);
-                            sanitizations++;
-                        }
-
-                        if (reply.Length > 350)
-                            reply = reply[..350];
-
-                        var ev = new GameEvent
-                        {
-                            Id = Guid.NewGuid(),
-                            Timestamp = DateTime.UtcNow,
-                            Type = "npc_reply",
-                            Location = ch.LocationName ?? "unknown",
-                            PayloadJson = JsonSerializer.Serialize(new
-                            {
-                                characterId = ch.Id,
-                                name = ch.Name,
-                                archetype,
-                                location = ch.LocationName,
-                                peerId = peer?.Id,
-                                // Try to include structured JSON for essence/skills if possible
-                                essence = TryParseJsonOrRaw(ch.EssenceJson),
-                                skills = TryParseJsonOrRaw(ch.SkillsJson),
-                                history = ch.History,
-                                reply,
-                                moodDelta = mood,
-                                meta = new { reasksPerformed, sanitizations }
-                            })
-                        };
-                        events.Add(ev);
-                        // If this NPC's reply indicates an intent to reclaim, also create a reclaim attempt event
-                        // (this helps test and integrate with ConflictAgent)
-                        try
-                        {
-                            // parse reply for intent - if mood or other signals exist this can be extended
-                            // But we already create separate npc_reaction events below; here we simply check meta
-                            // and enqueue an ownership_reclaim_attempt when appropriate.
-                            // For simplicity, create a reclaim attempt with this character as claimant when moodDelta positive or when reply mentions " вернуть "
-                            var lowerReply = reply.ToLowerInvariant();
-                            bool wantsReclaim = (mood.HasValue && mood.Value > 0) || lowerReply.Contains("вернуть") || lowerReply.Contains("отнять") || lowerReply.Contains("взыскать");
-                            if (wantsReclaim)
-                            {
-                                var claimEv = new GameEvent
-                                {
-                                    Id = Guid.NewGuid(),
-                                    Timestamp = DateTime.UtcNow,
-                                    Type = "ownership_reclaim_attempt",
-                                    Location = ch.LocationName ?? "unknown",
-                                    PayloadJson = JsonSerializer.Serialize(new { characterId = ch.Id, note = "npc_spontaneous_reclaim_intent", sampleReply = reply })
-                                };
-                                _ = dispatcher.EnqueueAsync(claimEv);
-                            }
-                        }
-                        catch { }
-                        break;
-                    }
-                }
-                if (reasksPerformed > 0)
-                {
-                    _logger?.LogInformation("NpcAgent: reasks={Reasks} sanitizations={Sanitizations} for {Character}", reasksPerformed, sanitizations, ch.Name);
-                    metrics?.Add("npc.reasks", reasksPerformed);
-                }
-                if (sanitizations > 0)
-                {
-                    metrics?.Add("npc.sanitizations", sanitizations);
-                }
+                await replyQueue.EnqueueAsync(new Imperium.Api.Services.NpcReplyRequest(ch.Id, archetype, ct));
+                metrics?.Add("npc.enqueued", 1);
             }
             catch (Exception ex)
             {
-                _logger?.LogWarning(ex, "NpcAgent: ошибка при обработке NPC {Id}", ch.Id);
+                _logger?.LogWarning(ex, "NpcAgent: failed to enqueue npc reply for {Id}", ch.Id);
             }
         }
 
@@ -534,12 +405,24 @@ public class NpcAgent : IWorldAgent
         var essence = ch.EssenceJson ?? "{}";
         var loc = string.IsNullOrWhiteSpace(ch.LocationName) ? "неизвестное место" : ch.LocationName;
         var history = string.IsNullOrWhiteSpace(ch.History) ? "" : ch.History;
-        var gender = string.IsNullOrWhiteSpace(ch.Gender) ? null : ch.Gender;
-        var genderRu = gender == null ? "" : (string.Equals(gender, "female", StringComparison.OrdinalIgnoreCase) ? "женщина" : "мужчина");
+        var normalizedGender = GenderHelper.Normalize(ch.Gender);
+        var genderRu = normalizedGender switch
+        {
+            "female" => "женщина",
+            "male" => "мужчина",
+            _ => string.Empty
+        };
+        var toneHint = normalizedGender switch
+        {
+            "female" => "Персонаж женского пола: используй мягкие, заботливые обороты речи и женские окончания, если уместно.",
+            "male" => "Персонаж мужского пола: допускаются более уверенные и решительные формулировки с мужскими окончаниями.",
+            _ => "Пол не указан: придерживайся нейтрального тона без упора на гендер."
+        };
 
         return $@"[role:Npc]
         Ты отвечаешь как житель античного Средиземноморья. Говори уверенно и только на русском языке, используя кириллицу. 
-        Ты — {(string.IsNullOrWhiteSpace(genderRu) ? "" : genderRu + ", ")} {archetype} по характеру. 
+        Ты — {(string.IsNullOrWhiteSpace(genderRu) ? "" : genderRu + ", ")}{archetype} по характеру. 
+        {toneHint}
         Не упоминай современные технологии, нейросети или английские слова. Верни JSON без лишних полей: {{""reply"": string, ""moodDelta"": int (опционально)}}. 
         Поле reply должно содержать 2–3 короткие фразы (до 40 слов) и оставаться в рамках эпохи. 
         Контекст: имя {npcNameJson}, возраст {ch.Age}, статус {ch.Status ?? "неизвестно"}, локация {loc}, навыки {skillsJson}, сущность {essence}, история {history}, текущая дата {DateTime.UtcNow:O}.";

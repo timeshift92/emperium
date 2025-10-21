@@ -21,7 +21,7 @@ export default function CharacterFocus({ className, characterId }: Props) {
   const [g, setG] = useState<Genealogy | null>(null);
   const [rels, setRels] = useState<Relationship[]>([]);
   const [comms, setComms] = useState<RawEvent[]>([]);
-  const [loading, setLoading] = useState(true);
+  const [_loading, setLoading] = useState(true);
 
   useEffect(() => {
     let cancelled = false;
@@ -104,7 +104,7 @@ export default function CharacterFocus({ className, characterId }: Props) {
                   <div>
                     <div className="text-xs uppercase tracking-wide text-slate-400">Супруг(а)</div>
                     <div className="mt-2 flex flex-wrap gap-2">
-                      {g.spouses.length ? g.spouses.map((s, i) => (
+                      {g.spouses.length ? g.spouses.map((s) => (
                         genealogyNode("Супруг", s.id, (s.details as any) ?? undefined)
                       )) : <div className="text-xs text-slate-400">—</div>}
                     </div>
@@ -112,7 +112,7 @@ export default function CharacterFocus({ className, characterId }: Props) {
                   <div>
                     <div className="text-xs uppercase tracking-wide text-slate-400">Дети</div>
                     <div className="mt-2 flex flex-wrap gap-2">
-                      {g.children.length ? g.children.map((c, i) => (
+                      {g.children.length ? g.children.map((c) => (
                         genealogyNode("Ребёнок", c.id, (c.details as any) ?? undefined)
                       )) : <div className="text-xs text-slate-400">—</div>}
                     </div>
@@ -146,7 +146,7 @@ export default function CharacterFocus({ className, characterId }: Props) {
               <div className="text-sm text-slate-500">Нет записей</div>
             ) : (
               <ul className="grid gap-1 md:grid-cols-2">
-                {relTop.map((r, i) => (
+                {relTop.map((r) => (
                   <li key={r.id} className="flex items-center justify-between rounded border border-slate-200 bg-white/80 px-2 py-1 text-sm">
                     <span className="text-slate-700">{(r.other?.name as string) ?? r.otherId.slice(0,8)} <span className="text-xs text-slate-500">{r.type}</span></span>
                     <span className="text-xs text-slate-500">t:{r.trust} · l:{r.love} · h:{r.hostility}</span>

@@ -12,7 +12,8 @@ public static class ServiceCollectionExtensions
 
         // Register router which will decide which backend/model to call based on prompt role prefix and config
         services.AddHttpClient(); // for IHttpClientFactory
-        services.AddTransient<ILlmClient, RoleLlmRouter>();
+        services.AddTransient<RoleLlmRouter>();
+        services.AddTransient<ILlmClient>(sp => sp.GetRequiredService<RoleLlmRouter>());
 
         return services;
     }

@@ -4,8 +4,17 @@ namespace Imperium.Llm;
 
 public class MockLlmClient : ILlmClient
 {
+    private readonly string _response;
+    public MockLlmClient(string? response = null)
+    {
+        _response = response ?? string.Empty;
+    }
     public Task<string> SendPromptAsync(string prompt, CancellationToken ct = default)
     {
+        if (!string.IsNullOrEmpty(_response) && (prompt?.ToLowerInvariant().Contains("npc") == true || prompt?.ToLowerInvariant().Contains("персонаж") == true))
+        {
+            return Task.FromResult(_response);
+        }
         // Очень простой мок: если в промпте есть слово weather — вернуть JSON по контракту
         if (prompt?.ToLowerInvariant().Contains("weather") ?? false)
         {

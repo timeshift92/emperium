@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import WeatherCard from "@/components/WeatherCard";
 import { cn } from "@/lib/utils";
 import { useLatestEvent } from "@/lib/useLatestEvent";
@@ -12,14 +12,18 @@ function formatTime(payload: unknown) {
   const data = payload as Record<string, unknown>;
   const hour = typeof data.hour === "number" ? data.hour : undefined;
   const day = typeof data.day === "number" ? data.day : undefined;
+  const month = typeof data.month === "number" ? data.month : undefined;
+  const dayOfMonth = typeof data.dayOfMonth === "number" ? data.dayOfMonth : undefined;
   const year = typeof data.year === "number" ? data.year : undefined;
   const tick = typeof data.tick === "number" ? data.tick : undefined;
 
-  if (hour == null && day == null && year == null && tick == null) return null;
+  if (hour == null && day == null && year == null && tick == null && month == null && dayOfMonth == null) return null;
 
   return {
     hour,
     day,
+    month,
+    dayOfMonth,
     year,
     tick,
   };
@@ -53,6 +57,12 @@ export default function WorldSidebar({ className }: WorldSidebarProps) {
   });
   const [metrics, setMetrics] = useState<Record<string, number>>({});
   const [metricsError, setMetricsError] = useState<string | null>(null);
+  const [tickMetrics, setTickMetrics] = useState<{
+    durationsMs: number[];
+    averageMs: number;
+    lastMs: number;
+  } | null>(null);
+  const [tickMetricsError, setTickMetricsError] = useState<string | null>(null);
   useEffect(() => {
     let cancelled = false;
     let timer: number | null = null;
@@ -78,8 +88,58 @@ export default function WorldSidebar({ className }: WorldSidebarProps) {
     };
   }, []);
 
+  useEffect(() => {
+    let cancelled = false;
+    let timer: number | null = null;
+    const load = async () => {
+      try {
+        const res = await fetch("/api/metrics/ticks");
+        if (!res.ok) throw new Error(String(res.status));
+        const data = (await res.json()) as {
+          durationsMs: number[];
+          averageMs: number;
+          lastMs: number;
+        };
+        if (!cancelled) {
+          setTickMetrics(data);
+          setTickMetricsError(null);
+        }
+      } catch (err) {
+        if (!cancelled) {
+          setTickMetricsError(err instanceof Error ? err.message : "tick metrics error");
+        }
+      } finally {
+        if (!cancelled) {
+          timer = window.setTimeout(load, 15000);
+        }
+      }
+    };
+    load();
+    return () => {
+      cancelled = true;
+      if (timer) window.clearTimeout(timer);
+    };
+  }, []);
+
   const time = formatTime(timeInfo.payload);
   const season = formatSeason(seasonInfo.payload);
+  const sparklinePoints = useMemo(() => {
+    if (!tickMetrics || tickMetrics.durationsMs.length === 0) return "";
+    const values = tickMetrics.durationsMs;
+    const width = 160;
+    const height = 48;
+    const max = Math.max(...values);
+    const min = Math.min(...values);
+    const range = max - min || 1;
+    const lastIndex = values.length - 1;
+    return values
+      .map((value, index) => {
+        const x = lastIndex === 0 ? 0 : (index / lastIndex) * width;
+        const y = height - ((value - min) / range) * height;
+        return `${x.toFixed(2)},${y.toFixed(2)}`;
+      })
+      .join(" ");
+  }, [tickMetrics]);
 
   return (
     <aside
@@ -110,6 +170,18 @@ export default function WorldSidebar({ className }: WorldSidebarProps) {
                 <dt className="text-slate-500">Год</dt>
                 <dd className="font-medium text-slate-900">
                   {time.year ?? "—"}
+                </dd>
+              </div>
+              <div className="flex justify-between">
+                <dt className="text-slate-500">Месяц</dt>
+                <dd className="font-medium text-slate-900">
+                  {time.month ?? "—"}
+                </dd>
+              </div>
+              <div className="flex justify-between">
+                <dt className="text-slate-500">День месяца</dt>
+                <dd className="font-medium text-slate-900">
+                  {time.dayOfMonth ?? "—"}
                 </dd>
               </div>
               <div className="flex justify-between">
@@ -195,29 +267,102 @@ export default function WorldSidebar({ className }: WorldSidebarProps) {
           <div className="mt-3 grid grid-cols-2 gap-2 text-sm">
             <div className="rounded border border-slate-200 bg-white/80 p-3">
               <div className="text-xs uppercase tracking-wide text-slate-400">NPC реакции</div>
-              <div className="mt-2 space-y-1 text-slate-700">
+              <button
+                className="mt-2 w-full text-left space-y-1 text-slate-700"
+                onClick={() => window.dispatchEvent(new CustomEvent('imperium:show-summary', { detail: { type: 'npc_reactions' } }))}
+              >
                 <div>Всего: {metrics["npc.reactions"] ?? 0}</div>
                 <div className="text-xs text-slate-500">
                   + поддержка {metrics["npc.reactions.support"] ?? 0}, попытки {metrics["npc.reactions.attempt"] ?? 0}
                 </div>
-              </div>
+              </button>
             </div>
             <div className="rounded border border-slate-200 bg-white/80 p-3">
               <div className="text-xs uppercase tracking-wide text-slate-400">Конфликты</div>
-              <div className="mt-2 text-slate-700">Начато: {metrics["conflict.started"] ?? 0}</div>
+              <button className="mt-2 w-full text-left text-slate-700" onClick={() => window.dispatchEvent(new CustomEvent('imperium:show-summary', { detail: { type: 'conflict_started' } }))}>
+                Начато: {metrics["conflict.started"] ?? 0}
+              </button>
             </div>
             <div className="rounded border border-slate-200 bg-white/80 p-3">
               <div className="text-xs uppercase tracking-wide text-slate-400">Наследование</div>
-              <div className="mt-2 text-slate-700">Записей: {metrics["ownership.inheritance_recorded"] ?? 0}</div>
+              <button className="mt-2 w-full text-left text-slate-700" onClick={() => window.dispatchEvent(new CustomEvent('imperium:show-summary', { detail: { type: 'inheritance_recorded' } }))}>
+                Записей: {metrics["ownership.inheritance_recorded"] ?? 0}
+              </button>
             </div>
             <div className="rounded border border-slate-200 bg-white/80 p-3">
               <div className="text-xs uppercase tracking-wide text-slate-400">Право</div>
-              <div className="mt-2 text-slate-700">Решений: {(metrics["legal.rulings.llm"] ?? 0) + (metrics["legal.rulings.fallback"] ?? 0)}</div>
+              <button className="mt-2 w-full text-left text-slate-700" onClick={() => window.dispatchEvent(new CustomEvent('imperium:show-summary', { detail: { type: 'legal_rulings' } }))}>
+                Решений: {(metrics["legal.rulings.llm"] ?? 0) + (metrics["legal.rulings.fallback"] ?? 0)}
+              </button>
             </div>
           </div>
           {metricsError && (
             <div className="mt-2 text-xs text-red-500">metrics: {metricsError}</div>
           )}
+        </section>
+
+        <section>
+          <div className="text-sm font-semibold text-slate-700">Наблюдаемость</div>
+          <div className="mt-3 space-y-3 text-sm">
+            <div className="rounded border border-slate-200 bg-white/80 p-3">
+              <div className="text-xs uppercase tracking-wide text-slate-400">
+                Длительность тика
+              </div>
+              {tickMetrics && tickMetrics.durationsMs.length > 1 ? (
+                <>
+                  <div className="mt-2 flex items-end justify-between text-slate-700">
+                    <div>
+                      <div className="text-xs text-slate-500">Последний тик</div>
+                      <div className="text-lg font-semibold text-slate-900">
+                        {tickMetrics.lastMs.toFixed(0)} мс
+                      </div>
+                    </div>
+                    <div className="text-right">
+                      <div className="text-xs text-slate-500">
+                        Среднее (≈{tickMetrics.durationsMs.length} тиков)
+                      </div>
+                      <div className="text-sm font-medium text-slate-900">
+                        {tickMetrics.averageMs.toFixed(0)} мс
+                      </div>
+                    </div>
+                  </div>
+                  <div className="mt-3 rounded-md border border-slate-200 bg-slate-50/60 p-2">
+                    <svg viewBox="0 0 160 48" className="h-12 w-full">
+                      <polyline
+                        points={sparklinePoints}
+                        fill="none"
+                        stroke="#2563eb"
+                        strokeWidth={2}
+                        strokeLinecap="round"
+                        strokeLinejoin="round"
+                      />
+                    </svg>
+                    <div className="mt-1 text-xs text-slate-500">
+                      История последних тиков (мс)
+                    </div>
+                  </div>
+                </>
+              ) : (
+                <div className="mt-2 text-slate-500">Нет данных для графика</div>
+              )}
+              {tickMetricsError && (
+                <div className="mt-2 text-xs text-red-500">
+                  tick metrics: {tickMetricsError}
+                </div>
+              )}
+            </div>
+            <div className="rounded border border-slate-200 bg-white/80 p-3">
+              <div className="text-xs uppercase tracking-wide text-slate-400">
+                LLM вызовы
+              </div>
+              <div className="mt-2 space-y-1 text-slate-700">
+                <div>Всего: {metrics["llm.requests"] ?? 0}</div>
+                <div className="text-xs text-slate-500">
+                  Успешно {metrics["llm.success"] ?? 0}, ошибки {metrics["llm.errors"] ?? 0}, отмены {metrics["llm.canceled"] ?? 0}
+                </div>
+              </div>
+            </div>
+          </div>
         </section>
       </div>
     </aside>

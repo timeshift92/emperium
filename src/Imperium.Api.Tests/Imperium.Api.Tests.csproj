@@ -11,6 +11,7 @@
     <PackageReference Include="coverlet.collector" Version="4.0.1" />
   <PackageReference Include="Microsoft.EntityFrameworkCore.Sqlite" Version="9.0.10" />
   <PackageReference Include="Microsoft.EntityFrameworkCore.InMemory" Version="9.0.10" />
+    <PackageReference Include="Microsoft.AspNetCore.Mvc.Testing" Version="8.0.0" />
   </ItemGroup>
   <ItemGroup>
     <ProjectReference Include="..\Imperium.Api\Imperium.Api.csproj" />

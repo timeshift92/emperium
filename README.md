@@ -27,6 +27,13 @@ OPENAI_API_KEY=sk-... docker compose up --build
 - `GET /api/decrees`
 - `POST /api/decrees` body:
 - `GET /api/weather/latest`
+ - `GET /api/economy/items` — список имён товаров
+ - `POST /api/economy/items` — добавить массив имён товаров
+ - `GET /api/economy/item-defs` — получить определения (метаданные) всех товаров
+ - `GET /api/economy/item-defs/{name}` — получить определение товара по имени
+ - `POST /api/economy/item-defs` — создать/обновить определение товара (JSON в теле запроса)
+- `GET /metrics` — Prometheus-совместимые метрики (OpenTelemetry)
+- `SignalR /hubs/events` — поток `GameEvent`/`WeatherSnapshot` в реальном времени
     
 Weather POST will be added to allow manual override in future updates.
 ```json
@@ -47,6 +54,10 @@ Weather POST will be added to allow manual override in future updates.
  - Weather: "Generate compact JSON: {condition, temperatureC, windKph, precipitationMm} for an ancient Mediterranean city."
  - Council: "Advise on current tax policy given treasury X and tax rate Y. Provide concise recommendation." 
  - Conflict: "Assess revolt risk based on avg loyalty L and treasury T. Return short assessment." 
+
+Экономика: товары и метаданные
+- Экономика теперь поддерживает динамические товары. У каждого товара есть определение с полями Name, BasePrice, Unit, ConsumptionPerTick и Tags.
+- Используйте эндпоинты `/api/economy/item-defs` для просмотра и управления метаданными товаров. Агенты (Production, Consumption, Economy) используют эти определения в реальном времени.
 
 Удачи! 👑
 

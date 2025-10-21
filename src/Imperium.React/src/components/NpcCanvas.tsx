@@ -76,7 +76,7 @@ export default function NpcCanvas({ className, height = 320 }: NpcCanvasProps) {
       }
       // NPCs in small cluster near location
       const list = charsByLoc[l.id] ?? [];
-      list.slice(0, 12).forEach((c, idx) => {
+  list.slice(0, 12).forEach((_, idx) => {
         const ang = (idx / 12) * Math.PI * 2;
         const r = 12 + (idx % 4) * 3;
         const nx = x + Math.cos(ang) * r;
@@ -115,25 +115,37 @@ export default function NpcCanvas({ className, height = 320 }: NpcCanvasProps) {
     const lonSpan = bounds.maxLon - bounds.minLon || 1;
     const xOf = (lon: number) => pad + ((lon - bounds.minLon) / lonSpan) * (cvs.width - pad * 2);
     const yOf = (lat: number) => pad + (1 - (lat - bounds.minLat) / latSpan) * (cvs.height - pad * 2);
-    const nearestLoc = (x: number, y: number) => {
-      let best: { l: Loc; d: number; cx: number; cy: number } | null = null;
-      locations.forEach(l => {
-        const cx = xOf(l.longitude ?? 0), cy = yOf(l.latitude ?? 0);
-        const dx = x - cx, dy = y - cy; const d = Math.hypot(dx, dy);
-        if (!best || d < best.d) best = { l, d, cx, cy };
-      });
-      return best && best.d < 12 ? best : null;
+    const nearestLoc = (x: number, y: number): { l: Loc; d: number; cx: number; cy: number } | null => {
+      let bestL: Loc | null = null;
+      let bestD = Number.POSITIVE_INFINITY;
+      let bestCx = 0;
+      let bestCy = 0;
+      for (const l of locations) {
+        const cx = xOf(l.longitude ?? 0);
+        const cy = yOf(l.latitude ?? 0);
+        const dx = x - cx;
+        const dy = y - cy;
+        const d = Math.hypot(dx, dy);
+        if (d < bestD) {
+          bestD = d;
+          bestL = l;
+          bestCx = cx;
+          bestCy = cy;
+        }
+      }
+      if (bestL && bestD < 12) return { l: bestL, d: bestD, cx: bestCx, cy: bestCy };
+      return null;
     };
     const onMove = (e: MouseEvent) => {
       const { x, y } = toCanvas(e);
-      const hit = nearestLoc(x, y);
-      setHover(hit ? { x: hit.cx, y: hit.cy, loc: hit.l } : null);
+  const hit = nearestLoc(x, y);
+  if (hit) setHover({ x: hit.cx, y: hit.cy, loc: hit.l }); else setHover(null);
     };
     const onLeave = () => setHover(null);
     const onClick = (e: MouseEvent) => {
       const { x, y } = toCanvas(e);
-      const hit = nearestLoc(x, y);
-      setSelectedLoc(hit?.l ?? null);
+  const hit = nearestLoc(x, y);
+  if (hit) setSelectedLoc(hit.l); else setSelectedLoc(null);
     };
     cvs.addEventListener("mousemove", onMove);
     cvs.addEventListener("mouseleave", onLeave);

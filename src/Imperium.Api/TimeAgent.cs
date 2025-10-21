@@ -36,6 +36,8 @@ public class TimeAgent : IWorldAgent
     const int ticksPerHour = 120;
     const int ticksPerDay = 2880;
     const int ticksPerYear = 34560;
+    const int monthsPerYear = 12;
+    var ticksPerMonth = ticksPerYear / monthsPerYear;
 
     // remember previous counters before advancing the tick
     var prevTick = worldTime.Tick;
@@ -49,7 +51,11 @@ public class TimeAgent : IWorldAgent
         worldTime.Hour = (int)((worldTime.Tick % ticksPerDay) / ticksPerHour);
         worldTime.Day = (int)((worldTime.Tick % ticksPerYear) / ticksPerDay);
         worldTime.Year = (int)(worldTime.Tick / ticksPerYear);
-        worldTime.IsDaytime = worldTime.Hour >= 6 && worldTime.Hour < 18;
+    worldTime.IsDaytime = worldTime.Hour >= 6 && worldTime.Hour < 18;
+    worldTime.Month = (int)(((worldTime.Tick % ticksPerYear) / ticksPerMonth) + 1);
+    // compute DayOfMonth as day index within month
+    var dayOfYear = (int)((worldTime.Tick % ticksPerYear) / ticksPerDay);
+    worldTime.DayOfMonth = (dayOfYear % (ticksPerMonth / ticksPerDay)) + 1;
         worldTime.LastUpdated = DateTime.UtcNow;
 
         // persist worldTime
@@ -57,14 +63,15 @@ public class TimeAgent : IWorldAgent
 
         // Emit tick event via central dispatcher (non-blocking for agents)
         var dispatcher = scopeServices.GetRequiredService<Imperium.Domain.Services.IEventDispatcher>();
-
+        var currentMonth = (int)((worldTime.Tick % ticksPerYear) / ticksPerMonth) + 1; // 1..12
         await dispatcher.EnqueueAsync(new GameEvent
         {
             Id = Guid.NewGuid(),
             Timestamp = DateTime.UtcNow,
             Type = "time_tick",
             Location = "global",
-            PayloadJson = JsonSerializer.Serialize(new { tick = worldTime.Tick, hour = worldTime.Hour, day = worldTime.Day, year = worldTime.Year })
+            // include month and dayOfMonth for UI
+            PayloadJson = JsonSerializer.Serialize(new { tick = worldTime.Tick, hour = worldTime.Hour, day = worldTime.Day, month = currentMonth, dayOfMonth = worldTime.DayOfMonth, year = worldTime.Year })
         });
 
         // If day changed, emit day_change
@@ -92,6 +99,21 @@ public class TimeAgent : IWorldAgent
                 Type = "year_change",
                 Location = "global",
                 PayloadJson = JsonSerializer.Serialize(new { year = worldTime.Year })
+            });
+        }
+
+        // If month changed, emit month_change (months are derived from ticks/season about a 12-part year)
+        var oldMonth = (int)((oldDay % ticksPerYear) / ticksPerMonth) + 1;
+        var newMonth = (int)((worldTime.Tick % ticksPerYear) / ticksPerMonth) + 1;
+        if (newMonth != oldMonth)
+        {
+            await dispatcher.EnqueueAsync(new GameEvent
+            {
+                Id = Guid.NewGuid(),
+                Timestamp = DateTime.UtcNow,
+                Type = "month_change",
+                Location = "global",
+                PayloadJson = JsonSerializer.Serialize(new { month = newMonth, year = worldTime.Year })
             });
         }
     }

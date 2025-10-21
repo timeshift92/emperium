@@ -53,8 +53,20 @@ public class ConsumptionAgent : IWorldAgent
                                               .OrderByDescending(i => i.UpdatedAt)
                                               .FirstOrDefaultAsync(ct);
                 var locId = inv?.LocationId;
-
-                var baseCons = eco.ConsumptionPerTick.TryGetValue(item, out var c) ? c : 0.5m;
+                var def = state.GetDefinition(item);
+                decimal baseCons;
+                if (def?.ConsumptionPerTick != null)
+                {
+                    baseCons = def.ConsumptionPerTick;
+                }
+                else if (eco.ConsumptionPerTick.TryGetValue(item, out var c))
+                {
+                    baseCons = c;
+                }
+                else
+                {
+                    baseCons = 0.5m;
+                }
                 var consume = baseCons + (decimal)(Random.Shared.NextDouble() * (double)baseCons * 0.25);
                 if (inv != null)
                 {

@@ -1,10 +1,19 @@
 using System.Collections.Generic;
 using Imperium.Api;
+using Imperium.Api.Extensions;
+using Imperium.Api.Services;
 using Microsoft.Extensions.DependencyInjection.Extensions;
 using Microsoft.EntityFrameworkCore;
+using Microsoft.Extensions.Logging;
 using Imperium.Llm;
+using Imperium.Api.Models;
 using System.Linq;
 using System.Text.Json;
+using Imperium.Infrastructure;
+using Imperium.Domain.Models;
+using OpenTelemetry.Resources;
+using OpenTelemetry.Trace;
+using OpenTelemetry.Metrics;
 
 var builder = WebApplication.CreateBuilder(args);
 
@@ -29,6 +38,23 @@ Directory.CreateDirectory(dataDir);
 var dbPath = Path.Combine(dataDir, "imperium.db");
 builder.Services.AddDbContext<Imperium.Infrastructure.ImperiumDbContext>(opt =>
     opt.UseSqlite($"Data Source={dbPath}"));
+
+builder.Services.AddSignalR();
+builder.Services
+    .AddOpenTelemetry()
+    .ConfigureResource(resource => resource.AddService("Imperium.Api"))
+    .WithTracing(tracing =>
+        tracing
+            .AddAspNetCoreInstrumentation()
+            .AddHttpClientInstrumentation()
+            .AddSource("Imperium.Llm", "Imperium.TickWorker"))
+    .WithMetrics(metrics =>
+        metrics
+            .AddAspNetCoreInstrumentation()
+            .AddHttpClientInstrumentation()
+            .AddRuntimeInstrumentation()
+            .AddMeter("Imperium.Api.Metrics")
+            .AddPrometheusExporter());
 
 // Регистрация агентов и воркера
 // Регистрируем IWorldAgent реализации (TimeAgent, WeatherAgent, SeasonAgent)
@@ -56,6 +82,10 @@ if (!disableTickWorker)
 builder.Services.AddSingleton<Imperium.Api.MetricsService>();
 // Event stream for SSE
 builder.Services.AddSingleton<Imperium.Api.EventStreamService>();
+// NPC reply queue and background worker
+builder.Services.AddSingleton<Imperium.Api.Services.INpcReplyQueue, Imperium.Api.Services.NpcReplyQueueService>();
+builder.Services.AddSingleton<Imperium.Api.Services.NpcReplyQueueService>();
+builder.Services.AddHostedService(sp => sp.GetRequiredService<Imperium.Api.Services.NpcReplyQueueService>());
 // Names generator
 builder.Services.AddSingleton<Imperium.Api.Services.NamesService>();
 // Economy options
@@ -65,6 +95,8 @@ var seedItems = builder.Configuration.GetSection("Economy:Items").Exists()
     ? builder.Configuration.GetSection("Economy:Items").Get<string[]>()
     : null;
 builder.Services.AddSingleton(new Imperium.Api.EconomyStateService(seedItems));
+builder.Services.Configure<Imperium.Api.LogisticsOptions>(builder.Configuration.GetSection("Logistics"));
+builder.Services.AddSingleton<LogisticsQueueService>();
 // Currency options (DecimalPlaces)
 if (builder.Configuration.GetSection("Currency").Exists())
 {
@@ -121,11 +153,15 @@ var llmOptions = builder.Configuration.GetSection("Llm").Get<Imperium.Llm.LlmOpt
 if (llmOptions.Provider.Equals("OpenAI", StringComparison.OrdinalIgnoreCase) && string.IsNullOrWhiteSpace(apiKey))
 {
     // OpenAI requested but no key — use mock to avoid startup exceptions in dev
-    builder.Services.AddSingleton<Imperium.Llm.ILlmClient, Imperium.Llm.MockLlmClient>();
-    // Also register a named fallback for RoleLlmRouter via the concrete Mock implementation
     builder.Services.AddSingleton<Imperium.Llm.MockLlmClient>();
     builder.Services.AddSingleton<Imperium.Llm.IFallbackLlmProvider, Imperium.Llm.MockFallbackProvider>();
     builder.Services.AddSingleton<IStartupFilter>(sp => new Imperium.Api.StartupLog("MockLlmClient (no OpenAI key)"));
+
+    builder.Services.AddSingleton<Imperium.Llm.ILlmClient>(sp =>
+        new Imperium.Api.Services.LlmMetricsDecorator(
+            sp.GetRequiredService<Imperium.Llm.MockLlmClient>(),
+            sp.GetRequiredService<Imperium.Api.MetricsService>(),
+            sp.GetService<ILogger<Imperium.Api.Services.LlmMetricsDecorator>>()));
 }
 else
 {
@@ -133,13 +169,23 @@ else
     builder.Services.AddLlm(builder.Configuration);
     // Options: Npc reaction tuning
     builder.Services.Configure<Imperium.Api.NpcReactionOptions>(builder.Configuration.GetSection("NpcReactions"));
+    builder.Services.Configure<Imperium.Api.RelationshipModifierOptions>(builder.Configuration.GetSection("RelationshipModifiers"));
     // Ensure MockLlmClient is available as a fallback even when primary provider is configured
     builder.Services.TryAddSingleton<Imperium.Llm.MockLlmClient>();
     builder.Services.TryAddSingleton<Imperium.Llm.IFallbackLlmProvider, Imperium.Llm.MockFallbackProvider>();
     builder.Services.AddSingleton<IStartupFilter>(sp => new Imperium.Api.StartupLog($"LLM provider: {llmOptions.Provider} model: {llmOptions.Model}"));
+
+    builder.Services.AddTransient<Imperium.Llm.ILlmClient>(sp =>
+        new Imperium.Api.Services.LlmMetricsDecorator(
+            sp.GetRequiredService<Imperium.Llm.RoleLlmRouter>(),
+            sp.GetRequiredService<Imperium.Api.MetricsService>(),
+            sp.GetService<ILogger<Imperium.Api.Services.LlmMetricsDecorator>>()));
 }
 
 var app = builder.Build();
+
+app.MapPrometheusScrapingEndpoint();
+app.MapHub<Imperium.Api.Hubs.EventsHub>("/hubs/events");
 
 // Ensure database created
 using (var scope = app.Services.CreateScope())
@@ -273,9 +319,6 @@ app.MapGet("/weatherforecast", () =>
 // Простой endpoint для получения последнего погодного снимка (генерируется через LLM-mock)
 app.MapGet("/api/weather/latest", async (Imperium.Llm.ILlmClient llm, CancellationToken ct) =>
 {
-    // Health endpoint
-    app.MapGet("/health", () => Results.Json(new { status = "ok", time = DateTime.UtcNow })).WithName("Health");
-
     var prompt = "Generate compact JSON weather snapshot: {condition, temperatureC, windKph, precipitationMm}";
     var raw = await llm.SendPromptAsync(prompt, ct);
     if (Imperium.Llm.WeatherValidator.TryParse(raw, out var dto, out var error))
@@ -284,6 +327,9 @@ app.MapGet("/api/weather/latest", async (Imperium.Llm.ILlmClient llm, Cancellati
     }
     return Results.Problem(detail: $"LLM returned invalid JSON: {error}", statusCode: 502);
 }).WithName("GetLatestWeather");
+
+// Health endpoint
+app.MapGet("/health", () => Results.Json(new { status = "ok", time = DateTime.UtcNow })).WithName("Health");
 
 // Dev endpoint: recent GameEvents (read-only, useful for smoke tests)
 app.MapGet("/api/events/recent/{count:int?}", async (int? count, Imperium.Infrastructure.ImperiumDbContext db) =>
@@ -309,6 +355,24 @@ app.MapGet("/api/metrics", (Imperium.Api.MetricsService metrics) =>
 {
     return Results.Json(metrics.Snapshot());
 }).WithName("GetMetrics");
+
+app.MapGet("/api/metrics/ticks", (Imperium.Api.MetricsService metrics) =>
+{
+    var samples = metrics.GetRecentTickDurations();
+    var average = samples.Length > 0 ? samples.Average() : 0;
+    var last = samples.Length > 0 ? samples[^1] : 0;
+    return Results.Json(new { durationsMs = samples, averageMs = average, lastMs = last });
+}).WithName("GetTickMetrics");
+
+// Queue metrics: processed, dropped, average processing time
+app.MapGet("/api/metrics/queue", (Imperium.Api.MetricsService metrics, Imperium.Api.Services.NpcReplyQueueService queue) =>
+{
+    var snapshot = metrics.Snapshot();
+    var processed = queue.ProcessedCount;
+    var dropped = queue.DroppedCount;
+    var avgMs = processed > 0 ? (double)queue.TotalProcessingMs / processed : 0.0;
+    return Results.Json(new { counters = snapshot, processed, dropped, avgProcessingMs = avgMs });
+}).WithName("GetQueueMetrics");
 
 // Economy: dev queries for orders/trades/inventory (backed by EF models)
 app.MapGet("/api/economy/orders", async (string? item, Guid? locationId, Guid? ownerId, string? ownerType, Guid? reachableFromLocationId, double? radiusKm, Imperium.Infrastructure.ImperiumDbContext db) =>
@@ -341,7 +405,12 @@ app.MapGet("/api/economy/orders", async (string? item, Guid? locationId, Guid? o
 }).WithName("GetOrders");
 
 // Create order: reserves funds/qty and supports household/character owner
-app.MapPost("/api/economy/orders", async (Imperium.Domain.Models.MarketOrder input, Imperium.Infrastructure.ImperiumDbContext db, HttpContext http) =>
+app.MapPost("/api/economy/orders", async (
+    Imperium.Domain.Models.MarketOrder input,
+    Imperium.Infrastructure.ImperiumDbContext db,
+    Imperium.Domain.Services.IEventDispatcher dispatcher,
+    Imperium.Api.MetricsService metrics,
+    HttpContext http) =>
 {
     if (string.IsNullOrWhiteSpace(input.Item) || string.IsNullOrWhiteSpace(input.Side))
     {
@@ -445,6 +514,29 @@ app.MapPost("/api/economy/orders", async (Imperium.Domain.Models.MarketOrder inp
 
     db.MarketOrders.Add(ord);
     await db.SaveChangesAsync();
+
+    metrics.Increment("economy.orders.created");
+    metrics.Add("economy.orders.active", 1);
+
+    var ev = new GameEvent
+    {
+        Id = Guid.NewGuid(),
+        Timestamp = DateTime.UtcNow,
+        Type = "order_placed",
+        Location = ord.LocationId?.ToString() ?? "global",
+        PayloadJson = System.Text.Json.JsonSerializer.Serialize(new
+        {
+            orderId = ord.Id,
+            ownerId = ord.OwnerId,
+            ownerType = ord.OwnerType,
+            side = ord.Side,
+            item = ord.Item,
+            price = ord.Price,
+            qty = ord.Quantity,
+            remaining = ord.Remaining
+        })
+    };
+    try { await dispatcher.EnqueueAsync(ev); } catch { }
 
     // Avoid WriteAsJsonAsync pipewriter path issues in some test hosts by serializing to string
     var json = System.Text.Json.JsonSerializer.Serialize(ord);
@@ -668,11 +760,42 @@ app.MapGet("/api/economy/inventory/aggregate", async (string by, string? item, I
     return Results.BadRequest(new { error = "by must be 'location' or 'owner'" });
 }).WithName("GetInventoryAggregate");
 
+app.MapGet("/api/logistics/jobs", (LogisticsQueueService queue) =>
+{
+    return Results.Json(queue.Snapshot());
+}).WithName("GetLogisticsJobs");
+
 // Economy: items list from config
 app.MapGet("/api/economy/items", (Imperium.Api.EconomyStateService state) =>
 {
     return Results.Json(state.GetItems());
 }).WithName("GetEconomyItems");
+
+// Economy: item definitions (metadata for each item)
+app.MapGet("/api/economy/item-defs", (Imperium.Api.EconomyStateService state) =>
+{
+    return Results.Json(state.GetDefinitions());
+}).WithName("GetItemDefinitions");
+
+app.MapGet("/api/economy/item-defs/{name}", (string name, Imperium.Api.EconomyStateService state) =>
+{
+    var d = state.GetDefinition(name);
+    if (d == null) return Results.NotFound();
+    return Results.Json(d);
+}).WithName("GetItemDefinition");
+
+app.MapPost("/api/economy/item-defs", (EconomyItemDefinition def, Imperium.Api.EconomyStateService state) =>
+{
+    if (string.IsNullOrWhiteSpace(def?.Name)) return Results.BadRequest(new { error = "требуется имя (Name)" });
+    if (def.BasePrice < 0m) return Results.BadRequest(new { error = "BasePrice должен быть >= 0" });
+    if (def.ConsumptionPerTick < 0m) return Results.BadRequest(new { error = "ConsumptionPerTick должен быть >= 0" });
+    if (def.WeightPerUnit <= 0m) return Results.BadRequest(new { error = "WeightPerUnit должен быть > 0" });
+    if (def.StackSize <= 0) return Results.BadRequest(new { error = "StackSize должен быть > 0" });
+    if (def.PerishableDays.HasValue && def.PerishableDays.Value < 0) return Results.BadRequest(new { error = "PerishableDays должен быть >= 0" });
+
+    state.AddOrUpdateDefinition(def);
+    return Results.Ok(def);
+}).WithName("AddOrUpdateItemDefinition");
 
 // Add items dynamically
 app.MapPost("/api/economy/items", (string[] items, Imperium.Api.EconomyStateService state) =>
@@ -684,7 +807,7 @@ app.MapPost("/api/economy/items", (string[] items, Imperium.Api.EconomyStateServ
 // Price shocks: item or "*" for all, factor (e.g., 1.2), optional expiresAt
 app.MapPost("/api/economy/shocks", (string item, decimal factor, DateTime? expiresAt, Imperium.Api.EconomyStateService state) =>
 {
-    if (factor <= 0) return Results.BadRequest(new { error = "factor must be > 0" });
+    if (factor <= 0) return Results.BadRequest(new { error = "factor должен быть > 0" });
     state.SetShock(item, factor, expiresAt);
     var which = string.IsNullOrWhiteSpace(item) ? "*" : item;
     return Results.Ok(new { item = which, factor, expiresAt });
@@ -707,7 +830,7 @@ app.MapPost("/api/dev/seed-items", (Imperium.Api.EconomyStateService state) =>
 }).WithName("DevSeedItems");
 
 // Cancel order: refunds reserved funds/qty when applicable
-app.MapDelete("/api/economy/orders/{id:guid}", async (Guid id, Imperium.Infrastructure.ImperiumDbContext db) =>
+app.MapDelete("/api/economy/orders/{id:guid}", async (Guid id, Imperium.Infrastructure.ImperiumDbContext db, Imperium.Api.MetricsService metrics) =>
 {
     var ord = await db.MarketOrders.FindAsync(id);
     if (ord == null) return Results.NotFound();
@@ -737,6 +860,8 @@ app.MapDelete("/api/economy/orders/{id:guid}", async (Guid id, Imperium.Infrastr
         ord.ReservedQty = 0;
     }
     await db.SaveChangesAsync();
+    metrics.Add("economy.orders.active", -1);
+    metrics.Increment("economy.orders.cancelled");
     return Results.Ok(new { cancelled = id });
 }).WithName("CancelOrder");
 
@@ -833,7 +958,7 @@ app.MapPost("/api/dev/seed-characters", async (int? count, Imperium.Infrastructu
             var child = characters[2];
             var markers = new List<string>();
             SeedDevFamilyData(db, mother, father, child, markers);
-            SeedDevOwnershipData(db, mother, father, child, markers);
+            SeedDevOwnershipData(db, mother, father, child, markers, app.Services.GetRequiredService<Imperium.Api.EconomyStateService>());
         }
         await db.SaveChangesAsync();
         return Results.Ok(new { seeded = characters.Length });
@@ -868,11 +993,11 @@ app.MapPost("/api/dev/seed-world", async (Imperium.Infrastructure.ImperiumDbCont
     var chars = await db.Characters.OrderBy(c => c.Name).Take(4).ToListAsync();
     if (chars.Count >= 3)
     {
-        var mother = chars[0];
-        var father = chars[1];
-        var child = chars[2];
-        SeedDevFamilyData(db, mother, father, child, created);
-        SeedDevOwnershipData(db, mother, father, child, created);
+    var mother = chars[0];
+    var father = chars[1];
+    var child = chars[2];
+    SeedDevFamilyData(db, mother, father, child, created);
+    SeedDevOwnershipData(db, mother, father, child, created, app.Services.GetRequiredService<Imperium.Api.EconomyStateService>());
     }
     else if (!await db.Households.AnyAsync())
     {
@@ -1019,9 +1144,10 @@ app.MapPost("/api/dev/reset-characters", async (Imperium.Infrastructure.Imperium
     return Results.Ok(new { reset = true, seeded = characters.Length });
 });
 // Public endpoints for characters (list / single) and their npc events
-app.MapGet("/api/characters", async (Imperium.Infrastructure.ImperiumDbContext db) =>
+app.MapGet("/api/characters", async (string? gender, Imperium.Infrastructure.ImperiumDbContext db) =>
 {
-    var items = await db.Characters
+    var query = db.Characters.AsQueryable().FilterByGender(gender);
+    var items = await query
         .OrderBy(c => c.Name)
         .Select(c => new { c.Id, c.Name, c.Age, c.Status, c.Gender, c.Money, c.LocationId, c.LocationName, c.Latitude, c.Longitude })
         .ToListAsync();
@@ -1294,16 +1420,143 @@ app.MapGet("/api/characters/{id:guid}/genealogy", async (Guid id, Imperium.Infra
 }).WithName("GetGenealogy");
 
 // Dev: trigger one immediate tick cycle (useful for testing)
-app.MapPost("/api/dev/tick-now", async (IServiceProvider sp) =>
+app.MapPost("/api/dev/tick-now", async (IServiceProvider sp, bool? advanceTime) =>
 {
     using var scope = sp.CreateScope();
     var agents = scope.ServiceProvider.GetServices<Imperium.Domain.Agents.IWorldAgent>()
         .OrderBy(a => a.Name == "TimeAI" ? 0 : 1).ToList();
-    foreach (var a in agents)
+
+    int completed = 0;
+    // Optionally run TimeAI first when requested (advanceTime=true)
+    var doAdvance = advanceTime ?? false;
+    if (doAdvance)
     {
-        await a.TickAsync(scope.ServiceProvider, CancellationToken.None);
+        var timeAgent = agents.FirstOrDefault(a => a.Name == "TimeAI");
+        if (timeAgent != null)
+        {
+            try
+            {
+                using var timeScope = sp.CreateScope();
+                using var agentCts = CancellationTokenSource.CreateLinkedTokenSource(CancellationToken.None);
+                agentCts.CancelAfter(TimeSpan.FromSeconds(15));
+                await timeAgent.TickAsync(timeScope.ServiceProvider, agentCts.Token);
+                System.Threading.Interlocked.Increment(ref completed);
+            }
+            catch (OperationCanceledException)
+            {
+                var logger = sp.GetService<Microsoft.Extensions.Logging.ILoggerFactory>()?.CreateLogger("DevTick");
+                logger?.LogWarning("TimeAgent tick canceled (timeout)");
+            }
+            catch (Exception ex)
+            {
+                var logger = sp.GetService<Microsoft.Extensions.Logging.ILoggerFactory>()?.CreateLogger("DevTick");
+                logger?.LogError(ex, "TimeAgent tick failed");
+            }
+        }
     }
-    return Results.Ok(new { ticks = agents.Count });
+
+    var otherAgents = agents.Where(a => a.Name != "TimeAI").ToList();
+    var maxConcurrency = 4;
+    var sem = new System.Threading.SemaphoreSlim(maxConcurrency);
+    var tasks = new List<Task>();
+    foreach (var a in otherAgents)
+    {
+        var agentType = a.GetType();
+        await sem.WaitAsync();
+        tasks.Add(Task.Run(async () =>
+        {
+            try
+            {
+                using var sScope = sp.CreateScope();
+                using var agentCts = CancellationTokenSource.CreateLinkedTokenSource(CancellationToken.None);
+                agentCts.CancelAfter(TimeSpan.FromSeconds(15));
+                try
+                {
+                    // Resolve a fresh agent instance from the per-task scope to ensure scoped services (DbContext) are unique
+                    var agent = sScope.ServiceProvider.GetServices<Imperium.Domain.Agents.IWorldAgent>().FirstOrDefault(i => i.GetType() == agentType);
+                    if (agent == null)
+                    {
+                        var logger = sScope.ServiceProvider.GetService<Microsoft.Extensions.Logging.ILoggerFactory>()?.CreateLogger("DevTick");
+                        logger?.LogWarning("Could not resolve agent of type {AgentType} in new scope", agentType.FullName);
+                    }
+                    else
+                    {
+                        await agent.TickAsync(sScope.ServiceProvider, agentCts.Token);
+                        System.Threading.Interlocked.Increment(ref completed);
+                    }
+                }
+                catch (OperationCanceledException)
+                {
+                    var logger = sScope.ServiceProvider.GetService<Microsoft.Extensions.Logging.ILoggerFactory>()?.CreateLogger("DevTick");
+                    logger?.LogWarning("Dev tick for {Agent} canceled (timeout)", a.Name);
+                }
+                catch (Exception ex)
+                {
+                    var logger = sScope.ServiceProvider.GetService<Microsoft.Extensions.Logging.ILoggerFactory>()?.CreateLogger("DevTick");
+                    logger?.LogError(ex, "Dev tick for {Agent} failed", a.Name);
+                }
+            }
+            finally
+            {
+                sem.Release();
+            }
+        }));
+    }
+    await Task.WhenAll(tasks);
+
+    // Fetch current worldTime for convenience
+    try
+    {
+        var db = scope.ServiceProvider.GetRequiredService<ImperiumDbContext>();
+        var wt = await db.WorldTimes.FirstOrDefaultAsync();
+        if (wt != null)
+        {
+            return Results.Ok(new
+            {
+                ticks = completed,
+                totalAgents = agents.Count,
+                advanced = doAdvance,
+                worldTime = new { tick = wt.Tick, hour = wt.Hour, day = wt.Day, month = wt.Month, dayOfMonth = wt.DayOfMonth, year = wt.Year }
+            });
+        }
+    }
+    catch { }
+
+    return Results.Ok(new { ticks = completed, totalAgents = agents.Count, advanced = doAdvance });
+});
+
+// Dev: tick only TimeAI (advance world time)
+app.MapPost("/api/dev/tick-time", async (IServiceProvider sp) =>
+{
+    using var scope = sp.CreateScope();
+    var timeAgent = scope.ServiceProvider.GetServices<Imperium.Domain.Agents.IWorldAgent>().FirstOrDefault(a => a.Name == "TimeAI");
+    if (timeAgent == null) return Results.Problem(detail: "TimeAI agent not found", statusCode: 500);
+    try
+    {
+        using var agentCts = new CancellationTokenSource(TimeSpan.FromSeconds(15));
+        await timeAgent.TickAsync(scope.ServiceProvider, agentCts.Token);
+    }
+    catch (OperationCanceledException)
+    {
+        // canceled
+    }
+    catch (Exception ex)
+    {
+        var logger = scope.ServiceProvider.GetService<Microsoft.Extensions.Logging.ILoggerFactory>()?.CreateLogger("DevTick");
+        logger?.LogError(ex, "TimeAgent tick failed");
+    }
+
+    try
+    {
+        var db = scope.ServiceProvider.GetRequiredService<ImperiumDbContext>();
+        var wt = await db.WorldTimes.FirstOrDefaultAsync();
+        if (wt != null)
+        {
+            return Results.Ok(new { success = true, worldTime = new { tick = wt.Tick, hour = wt.Hour, day = wt.Day, month = wt.Month, dayOfMonth = wt.DayOfMonth, year = wt.Year } });
+        }
+    }
+    catch { }
+    return Results.Ok(new { success = true, worldTime = (object?)null });
 });
 
 // Server-Sent Events: GameEvent stream
@@ -1312,11 +1565,25 @@ app.MapGet("/api/events/stream", async (Imperium.Api.EventStreamService stream, 
     ctx.Response.Headers.Append("Cache-Control", "no-cache");
     ctx.Response.Headers.Append("Content-Type", "text/event-stream");
     var reader = stream.Events;
-    await foreach (var e in reader.ReadAllAsync(ctx.RequestAborted))
+    try
     {
-        var json = System.Text.Json.JsonSerializer.Serialize(e);
-        await ctx.Response.WriteAsync($"data: {json}\n\n");
-        await ctx.Response.Body.FlushAsync();
+        await foreach (var e in reader.ReadAllAsync(ctx.RequestAborted))
+        {
+            var json = System.Text.Json.JsonSerializer.Serialize(e);
+            await ctx.Response.WriteAsync($"data: {json}\n\n");
+            await ctx.Response.Body.FlushAsync();
+        }
+    }
+    catch (OperationCanceledException)
+    {
+        // client disconnected - nothing to do
+        var logger = ctx.RequestServices.GetService<Microsoft.Extensions.Logging.ILoggerFactory>()?.CreateLogger("EventStream");
+        logger?.LogInformation("SSE client disconnected (events)");
+    }
+    catch (Exception ex)
+    {
+        var logger = ctx.RequestServices.GetService<Microsoft.Extensions.Logging.ILoggerFactory>()?.CreateLogger("EventStream");
+        logger?.LogError(ex, "Unhandled exception in events SSE stream");
     }
 }).WithName("EventStream");
 
@@ -1326,11 +1593,24 @@ app.MapGet("/api/weather/stream", async (Imperium.Api.EventStreamService stream,
     ctx.Response.Headers.Append("Cache-Control", "no-cache");
     ctx.Response.Headers.Append("Content-Type", "text/event-stream");
     var reader = stream.Weathers;
-    await foreach (var s in reader.ReadAllAsync(ctx.RequestAborted))
+    try
     {
-        var json = System.Text.Json.JsonSerializer.Serialize(s);
-        await ctx.Response.WriteAsync($"data: {json}\n\n");
-        await ctx.Response.Body.FlushAsync();
+        await foreach (var s in reader.ReadAllAsync(ctx.RequestAborted))
+        {
+            var json = System.Text.Json.JsonSerializer.Serialize(s);
+            await ctx.Response.WriteAsync($"data: {json}\n\n");
+            await ctx.Response.Body.FlushAsync();
+        }
+    }
+    catch (OperationCanceledException)
+    {
+        var logger = ctx.RequestServices.GetService<Microsoft.Extensions.Logging.ILoggerFactory>()?.CreateLogger("WeatherStream");
+        logger?.LogInformation("SSE client disconnected (weather)");
+    }
+    catch (Exception ex)
+    {
+        var logger = ctx.RequestServices.GetService<Microsoft.Extensions.Logging.ILoggerFactory>()?.CreateLogger("WeatherStream");
+        logger?.LogError(ex, "Unhandled exception in weather SSE stream");
     }
 }).WithName("WeatherStream");
 
@@ -1403,7 +1683,7 @@ static void SeedDevFamilyData(Imperium.Infrastructure.ImperiumDbContext db, Impe
     household.Wealth = Math.Max(household.Wealth, 320m);
 }
 
-static void SeedDevOwnershipData(Imperium.Infrastructure.ImperiumDbContext db, Imperium.Domain.Models.Character mother, Imperium.Domain.Models.Character father, Imperium.Domain.Models.Character child, List<string>? created)
+static void SeedDevOwnershipData(Imperium.Infrastructure.ImperiumDbContext db, Imperium.Domain.Models.Character mother, Imperium.Domain.Models.Character father, Imperium.Domain.Models.Character child, List<string>? created, Imperium.Api.EconomyStateService? econState = null)
 {
     void Mark(string label)
     {
@@ -1476,6 +1756,33 @@ static void SeedDevOwnershipData(Imperium.Infrastructure.ImperiumDbContext db, I
     UpsertMemory(mother.Id, new[] { latifundium.AssetId }, Array.Empty<Guid>(), 0.45, 0.7);
     UpsertMemory(father.Id, new[] { forge.AssetId }, new[] { latifundium.AssetId }, 0.6, 0.55);
     UpsertMemory(child.Id, new[] { observatory.AssetId }, Array.Empty<Guid>(), 0.3, 0.68);
+
+    // Ensure dev characters/household have some baseline inventories for staple goods
+    void EnsureInventory(Guid ownerId, string item, decimal qty)
+    {
+        var inv = db.Inventories.FirstOrDefault(i => i.OwnerId == ownerId && i.Item == item);
+        if (inv == null)
+        {
+            db.Inventories.Add(new Imperium.Domain.Models.Inventory { Id = Guid.NewGuid(), OwnerId = ownerId, OwnerType = "character", Item = item, Quantity = qty });
+        }
+        else
+        {
+            inv.Quantity = Math.Max(inv.Quantity, qty);
+        }
+    }
+
+    // Determine staple items dynamically from EconomyStateService
+    econState ??= new Imperium.Api.EconomyStateService();
+    var staples = new[] { "grain", "wine", "oil" }.Where(s => econState.GetItems().Contains(s, StringComparer.OrdinalIgnoreCase)).ToArray();
+    if (staples.Length == 0)
+    {
+        // fallback default staples
+        staples = new[] { "grain", "wine", "oil" };
+    }
+    // seed staple quantities with modest distribution
+    if (staples.Contains("grain")) { EnsureInventory(mother.Id, "grain", 120m); EnsureInventory(father.Id, "grain", 80m); EnsureInventory(child.Id, "grain", 60m); }
+    if (staples.Contains("wine")) EnsureInventory(mother.Id, "wine", 80m);
+    if (staples.Contains("oil")) EnsureInventory(father.Id, "oil", 80m);
 
     if (ownershipAdded) Mark("ownerships");
     if (memoriesAdded) Mark("npcmemories");

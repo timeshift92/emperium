@@ -115,6 +115,18 @@ export default function EventsList({ className, initialActiveType = "all", chara
     };
   }, []);
 
+  // Listen for external filter requests (e.g. from sidebar summary)
+  useEffect(() => {
+    const handler = (e: Event) => {
+      const detail = (e as CustomEvent).detail as { type?: string } | undefined;
+      if (detail?.type) {
+        setActiveType(detail.type === activeType ? "all" : detail.type);
+      }
+    };
+    window.addEventListener("imperium:filter-events-by-type", handler as any);
+    return () => window.removeEventListener("imperium:filter-events-by-type", handler as any);
+  }, [activeType]);
+
   const combinedEvents = useMemo(() => {
     const map = new Map<string, RawEvent>();
     const insert = (source: RawEvent[], isStream: boolean) => {

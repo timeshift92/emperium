@@ -4,11 +4,13 @@ import CouncilPanel from './components/CouncilPanel'
 import EventFeed from './components/EventFeed'
 import TimePanel from './components/TimePanel'
 import CharacterPanel from './components/CharacterPanel'
+import CharacterFocusPanel from './components/CharacterFocusPanel'
 import EconomyPanel from './components/EconomyPanel'
+import HouseholdPanel from './components/HouseholdPanel'
 import NpcPanel from './components/NpcPanel'
-import { startMockStream } from './services/mockStream'
+import { startEventStream } from './services/eventsClient'
 
-startMockStream()
+startEventStream()
 
 export default function App() {
   return (
@@ -22,7 +24,9 @@ export default function App() {
       <div className="col-span-4 flex flex-col gap-4">
         <CharacterPanel />
         <TimePanel />
+        <CharacterFocusPanel />
         <EconomyPanel />
+        <HouseholdPanel />
       </div>
     </div>
   )

@@ -4,6 +4,7 @@ using System.Text.Json;
 using Imperium.Domain.Agents;
 using Imperium.Domain.Models;
 using Imperium.Domain.Services;
+using Imperium.Domain.Utils;
 using Imperium.Infrastructure;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.DependencyInjection;
@@ -21,12 +22,15 @@ public class RelationshipAgent : IWorldAgent
     private const int MaxSample = 12;
     private const int ClampMin = -100;
     private const int ClampMax = 100;
+    private static readonly object GenderBiasLock = new();
+    private static readonly Dictionary<(Guid Source, Guid Target), double> GenderBiasResiduals = new();
 
     public async Task TickAsync(IServiceProvider scopeServices, CancellationToken ct)
     {
         var db = scopeServices.GetRequiredService<ImperiumDbContext>();
         var dispatcher = scopeServices.GetRequiredService<IEventDispatcher>();
         var metrics = scopeServices.GetRequiredService<MetricsService>();
+        var relOptions = scopeServices.GetService<Microsoft.Extensions.Options.IOptions<RelationshipModifierOptions>>()?.Value;
 
         static string AddGuidToJsonArray(string? json, Guid id)
         {
@@ -53,7 +57,7 @@ public class RelationshipAgent : IWorldAgent
 
         async Task<GenealogyRecord> GetOrCreateGenealogyAsync(Guid characterId)
         {
-                var record = await db.GenealogyRecords.FirstOrDefaultAsync(g => g.CharacterId == characterId);
+            var record = await db.GenealogyRecords.FirstOrDefaultAsync(g => g.CharacterId == characterId);
             if (record == null)
             {
                 record = new GenealogyRecord
@@ -175,8 +179,12 @@ public class RelationshipAgent : IWorldAgent
 
             // Базовая динамика чувств
             var moodSwing = random.Next(-4, 5); // [-4, 4]
-            relAB.Trust = Clamp(relAB.Trust + moodSwing);
-            relBA.Trust = Clamp(relBA.Trust + moodSwing);
+            var biasAB = ResolveGenderBias(a, b, relOptions);
+            var biasBA = ResolveGenderBias(b, a, relOptions);
+            var biasDeltaAB = ConsumeGenderBias(a.Id, b.Id, biasAB);
+            var biasDeltaBA = ConsumeGenderBias(b.Id, a.Id, biasBA);
+            relAB.Trust = Clamp(relAB.Trust + moodSwing + biasDeltaAB);
+            relBA.Trust = Clamp(relBA.Trust + moodSwing + biasDeltaBA);
 
             if (moodSwing >= 3)
             {
@@ -237,105 +245,159 @@ public class RelationshipAgent : IWorldAgent
                     var recordB = await GetOrCreateGenealogyAsync(b.Id);
                     recordB.SpouseIdsJson = AddGuidToJsonArray(recordB.SpouseIdsJson, a.Id);
                 }
-            }
 
-            // Проверка на предательство/разрыв
-            var hostilityScore = Math.Max(relAB.Hostility, relBA.Hostility);
-            if (hostilityScore >= 70 && random.NextDouble() < 0.04)
-            {
-                relAB.Type = "enmity";
-                relBA.Type = "enmity";
-                relAB.Trust = Clamp(relAB.Trust - 20);
-                relBA.Trust = Clamp(relBA.Trust - 20);
-                relAB.Love = Clamp(relAB.Love - 15);
-                relBA.Love = Clamp(relBA.Love - 15);
-
-                var betrayal = new GameEvent
+                // Проверка на предательство/разрыв
+                var hostilityScore = Math.Max(relAB.Hostility, relBA.Hostility);
+                if (hostilityScore >= 70 && random.NextDouble() < 0.04)
                 {
-                    Id = Guid.NewGuid(),
-                    Timestamp = DateTime.UtcNow,
-                    Type = "betrayal",
-                    Location = a.LocationName ?? "global",
-                    PayloadJson = JsonSerializer.Serialize(new
+                    relAB.Type = "enmity";
+                    relBA.Type = "enmity";
+                    relAB.Trust = Clamp(relAB.Trust - 20);
+                    relBA.Trust = Clamp(relBA.Trust - 20);
+                    relAB.Love = Clamp(relAB.Love - 15);
+                    relBA.Love = Clamp(relBA.Love - 15);
+
+                    var betrayal = new GameEvent
                     {
-                        aggressorId = a.Id,
-                        victimId = b.Id,
-                        names = new[] { a.Name, b.Name },
-                        hostility = hostilityScore
-                    })
-                };
-                producedEvents.Add(betrayal);
-                metrics.Increment("relationships.betrayal");
-            }
+                        Id = Guid.NewGuid(),
+                        Timestamp = DateTime.UtcNow,
+                        Type = "betrayal",
+                        Location = a.LocationName ?? "global",
+                        PayloadJson = JsonSerializer.Serialize(new
+                        {
+                            aggressorId = a.Id,
+                            victimId = b.Id,
+                            names = new[] { a.Name, b.Name },
+                            hostility = hostilityScore
+                        })
+                    };
+                    producedEvents.Add(betrayal);
+                    metrics.Increment("relationships.betrayal");
+                }
 
-            // Рождение ребёнка только для супружеских пар
-                    if (relAB.Type == "married" && relBA.Type == "married")
-        {
-            if (relAB.Love >= 80 && relBA.Love >= 80 && random.NextDouble() < 0.03)
-            {
-                relAB.Trust = Clamp(relAB.Trust + 5);
-                relBA.Trust = Clamp(relBA.Trust + 5);
-
-                var (orderedA, orderedB) = OrderPair(a, b);
-                var household = await EnsureHouseholdForPairAsync(orderedA, orderedB);
-                var family = await EnsureFamilyForHouseholdAsync(household);
-
-                var childId = Guid.NewGuid();
-                var childName = $"{orderedA.Name.Split(' ')[0]}-{orderedB.Name.Split(' ')[0]} child";
-                var newborn = new Character
+                // Рождение ребёнка только для супружеских пар
+                if (relAB.Type == "married" && relBA.Type == "married")
                 {
-                    Id = childId,
-                    Name = childName,
-                    Age = 0,
-                    Status = "infant",
-                    LocationId = orderedA.LocationId ?? orderedB.LocationId,
-                    LocationName = orderedA.LocationName ?? orderedB.LocationName,
-                    History = $"Child of {orderedA.Name} and {orderedB.Name}"
-                };
-                db.Characters.Add(newborn);
-
-                household.MemberIdsJson = AddGuidToJsonArray(household.MemberIdsJson, childId);
-                EnsureFamilyMembers(family, childId);
-                family.Wealth = household.Wealth;
-
-                var parentARecord = await GetOrCreateGenealogyAsync(orderedA.Id);
-                parentARecord.ChildrenIdsJson = AddGuidToJsonArray(parentARecord.ChildrenIdsJson, childId);
-
-                var parentBRecord = await GetOrCreateGenealogyAsync(orderedB.Id);
-                parentBRecord.ChildrenIdsJson = AddGuidToJsonArray(parentBRecord.ChildrenIdsJson, childId);
-
-                var childRecord = await GetOrCreateGenealogyAsync(childId);
-                childRecord.FatherId = orderedA.Id;
-                childRecord.MotherId = orderedB.Id;
-
-                var birthEvent = new GameEvent
-                {
-                    Id = Guid.NewGuid(),
-                    Timestamp = DateTime.UtcNow,
-                    Type = "child_birth",
-                    Location = orderedA.LocationName ?? "global",
-                    PayloadJson = JsonSerializer.Serialize(new
+                    if (relAB.Love >= 80 && relBA.Love >= 80 && random.NextDouble() < 0.03)
                     {
-                        parentA = orderedA.Id,
-                        parentB = orderedB.Id,
-                        childId,
-                        childName,
-                        familyName = orderedA.LocationName ?? "family",
-                        joy = Math.Min(relAB.Love, relBA.Love)
-                    })
-                };
-                producedEvents.Add(birthEvent);
-                metrics.Increment("relationships.child_birth");
+                        relAB.Trust = Clamp(relAB.Trust + 5);
+                        relBA.Trust = Clamp(relBA.Trust + 5);
+
+                        var (orderedA, orderedB) = OrderPair(a, b);
+                        var household = await EnsureHouseholdForPairAsync(orderedA, orderedB);
+                        var family = await EnsureFamilyForHouseholdAsync(household);
+
+                        var childId = Guid.NewGuid();
+                        var childName = $"{orderedA.Name.Split(' ')[0]}-{orderedB.Name.Split(' ')[0]} child";
+                        var newborn = new Character
+                        {
+                            Id = childId,
+                            Name = childName,
+                            Age = 0,
+                            Status = "infant",
+                            LocationId = orderedA.LocationId ?? orderedB.LocationId,
+                            LocationName = orderedA.LocationName ?? orderedB.LocationName,
+                            History = $"Child of {orderedA.Name} and {orderedB.Name}"
+                        };
+                        db.Characters.Add(newborn);
+
+                        household.MemberIdsJson = AddGuidToJsonArray(household.MemberIdsJson, childId);
+                        EnsureFamilyMembers(family, childId);
+                        family.Wealth = household.Wealth;
+
+                        var parentARecord = await GetOrCreateGenealogyAsync(orderedA.Id);
+                        parentARecord.ChildrenIdsJson = AddGuidToJsonArray(parentARecord.ChildrenIdsJson, childId);
+
+                        var parentBRecord = await GetOrCreateGenealogyAsync(orderedB.Id);
+                        parentBRecord.ChildrenIdsJson = AddGuidToJsonArray(parentBRecord.ChildrenIdsJson, childId);
+
+                        var childRecord = await GetOrCreateGenealogyAsync(childId);
+                        childRecord.FatherId = orderedA.Id;
+                        childRecord.MotherId = orderedB.Id;
+
+                        var birthEvent = new GameEvent
+                        {
+                            Id = Guid.NewGuid(),
+                            Timestamp = DateTime.UtcNow,
+                            Type = "child_birth",
+                            Location = orderedA.LocationName ?? "global",
+                            PayloadJson = JsonSerializer.Serialize(new
+                            {
+                                parentA = orderedA.Id,
+                                parentB = orderedB.Id,
+                                childId,
+                                childName,
+                                familyName = orderedA.LocationName ?? "family",
+                                joy = Math.Min(relAB.Love, relBA.Love)
+                            })
+                        };
+                        producedEvents.Add(birthEvent);
+                        metrics.Increment("relationships.child_birth");
+                    }
+                }
             }
-        }
-        }
 
-    await db.SaveChangesAsync();
+            await db.SaveChangesAsync();
 
-        foreach (var ev in producedEvents)
-        {
-            await dispatcher.EnqueueAsync(ev);
+            foreach (var ev in producedEvents)
+            {
+                await dispatcher.EnqueueAsync(ev);
+            }
         }
     }
+
+    private static double ResolveGenderBias(Character source, Character target, RelationshipModifierOptions? options)
+    {
+        if (options == null) return 0;
+        var from = GenderHelper.Normalize(source.Gender);
+        var to = GenderHelper.Normalize(target.Gender);
+        if (from == null || to == null) return 0;
+        if (from == to)
+        {
+            return options.Resolve("same");
+        }
+        if (from == "male" && to == "female")
+        {
+            return options.Resolve("male->female");
+        }
+        if (from == "female" && to == "male")
+        {
+            return options.Resolve("female->male");
+        }
+        return 0;
+    }
+
+    private static int ConsumeGenderBias(Guid sourceId, Guid targetId, double bias)
+    {
+        if (bias == 0) return 0;
+        lock (GenderBiasLock)
+        {
+            var key = (sourceId, targetId);
+            GenderBiasResiduals.TryGetValue(key, out var residual);
+            residual += bias;
+            int delta = 0;
+            if (residual >= 1)
+            {
+                delta = (int)Math.Floor(residual);
+                residual -= delta;
+            }
+            else if (residual <= -1)
+            {
+                delta = (int)Math.Ceiling(residual);
+                residual -= delta;
+            }
+
+            if (Math.Abs(residual) < 1e-6)
+            {
+                GenderBiasResiduals.Remove(key);
+            }
+            else
+            {
+                GenderBiasResiduals[key] = residual;
+            }
+            return delta;
+        }
+    }
+
 }
 

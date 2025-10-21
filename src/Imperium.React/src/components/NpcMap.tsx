@@ -208,14 +208,25 @@ export default function NpcMap({ className, height = 480, backgroundUrl, focusCh
       const rect = cvs.getBoundingClientRect(); const mx = e.clientX - rect.left, my = e.clientY - rect.top;
       if (dragging) { setOffset({ x: startOff.x + (e.clientX - start.x), y: startOff.y + (e.clientY - start.y) }); return; }
       // hover pick
-      const cur = renderPositions(); let hit: { id: string; p: Vec2; name: string } | null = null;
-      chars.forEach(c => {
-        const p = cur.get(c.id) ?? geoToLocal(c.latitude, c.longitude, c.locationId ?? undefined); const sp = { x: p.x*scale + offset.x, y: p.y*scale + offset.y }; const d = Math.hypot(mx - sp.x, my - sp.y); if (d < 7 && !hit) hit = { id: c.id, p: sp, name: c.name };
-      });
-      setHover(hit ? { name: hit.name, p: hit.p } : null);
+      const cur = renderPositions();
+      let hit: { id: string; p: Vec2; name: string } | null = null;
+      for (const c of chars) {
+        const p = cur.get(c.id) ?? geoToLocal(c.latitude, c.longitude, c.locationId ?? undefined);
+        const sp = { x: p.x * scale + offset.x, y: p.y * scale + offset.y };
+        const d = Math.hypot(mx - sp.x, my - sp.y);
+        if (d < 7 && !hit) {
+          hit = { id: c.id, p: sp, name: c.name };
+          break;
+        }
+      }
+      if (hit) {
+        setHover({ name: hit.name, p: hit.p });
+      } else {
+        setHover(null);
+      }
     };
     const onUp = () => { dragging = false; };
-    const onClick = (e: MouseEvent) => { if (hover) { const id = chars.find(c => c.name === hover.name)?.id ?? null; setSelected(id); onFocusCharacter?.(id!); const focus = 2.2; const mx = hover.p.x, my = hover.p.y; const sx = (mx - offset.x)/scale, sy = (my - offset.y)/scale; const ns = Math.max(scale, focus); setScale(ns); setOffset({ x: mx - sx*ns, y: my - sy*ns }); } };
+  const onClick = () => { if (hover) { const id = chars.find(c => c.name === hover.name)?.id ?? null; setSelected(id); onFocusCharacter?.(id!); const focus = 2.2; const mx = hover.p.x, my = hover.p.y; const sx = (mx - offset.x)/scale, sy = (my - offset.y)/scale; const ns = Math.max(scale, focus); setScale(ns); setOffset({ x: mx - sx*ns, y: my - sy*ns }); } };
     cvs.addEventListener("wheel", onWheel, { passive: false }); cvs.addEventListener("mousedown", onDown); window.addEventListener("mousemove", onMove); window.addEventListener("mouseup", onUp); cvs.addEventListener("click", onClick);
     return () => { cvs.removeEventListener("wheel", onWheel); cvs.removeEventListener("mousedown", onDown); window.removeEventListener("mousemove", onMove); window.removeEventListener("mouseup", onUp); cvs.removeEventListener("click", onClick); };
   }, [scale, offset, chars, hover]);

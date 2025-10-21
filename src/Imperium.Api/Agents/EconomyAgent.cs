@@ -1,6 +1,7 @@
 using Imperium.Domain.Agents;
 using Imperium.Infrastructure;
 using Imperium.Domain.Models;
+using Imperium.Api.Services;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.EntityFrameworkCore;
 using System.Text.Json;
@@ -17,6 +18,7 @@ public class EconomyAgent : IWorldAgent
         var db = scopeServices.GetRequiredService<ImperiumDbContext>();
         var metrics = scopeServices.GetRequiredService<Imperium.Api.MetricsService>();
         var stream = scopeServices.GetRequiredService<Imperium.Api.EventStreamService>();
+        var logisticsQueue = scopeServices.GetRequiredService<LogisticsQueueService>();
 
         // look at last 20 weather snapshots
     var snaps = await db.WeatherSnapshots.OrderByDescending(s => s.Timestamp).Take(20).ToListAsync();
@@ -29,7 +31,12 @@ public class EconomyAgent : IWorldAgent
                   ?? new Imperium.Api.EconomyOptions();
         var state = scopeServices.GetRequiredService<Imperium.Api.EconomyStateService>();
         var items = state.GetItems();
-        var globalPrices = items.ToDictionary(i => i, i => i switch { "grain" => 10m, "wine" => 15m, "oil" => 8m, _ => 5m });
+        var globalPrices = new Dictionary<string, decimal>(StringComparer.OrdinalIgnoreCase);
+        foreach (var it in items)
+        {
+            var def = state.GetDefinition(it);
+            globalPrices[it] = def?.BasePrice ?? (it switch { "grain" => 10m, "wine" => 15m, "oil" => 8m, _ => 5m });
+        }
 
         // adjust grain price: drought (avg < 1) -> +30%, heavy rain (>5) -> -10%
         if (globalPrices.ContainsKey("grain"))
@@ -112,22 +119,41 @@ public class EconomyAgent : IWorldAgent
             await db.SaveChangesAsync();
         }
 
-        // Transport: if price diff between locations large enough, create transport job event
         if (perLocationPrices.Count > 1)
         {
-            var maxPrice = perLocationPrices.Values.Max(p => p.GetValueOrDefault("grain", 0m));
-            var minPrice = perLocationPrices.Values.Min(p => p.GetValueOrDefault("grain", 0m));
-            if (maxPrice - minPrice > 3.0m)
+            var priced = perLocationPrices
+                .Where(kv => kv.Key != Guid.Empty)
+                .Select(kv => new { LocationId = kv.Key, Price = kv.Value.GetValueOrDefault("grain", 0m) })
+                .Where(x => x.Price > 0m)
+                .ToList();
+            if (priced.Count >= 2)
             {
-                var tj = new GameEvent
+                var maxEntry = priced.OrderByDescending(x => x.Price).First();
+                var minEntry = priced.OrderBy(x => x.Price).First();
+                var spread = maxEntry.Price - minEntry.Price;
+                if (spread > 3.0m)
                 {
-                    Id = Guid.NewGuid(),
-                    Timestamp = DateTime.UtcNow,
-                    Type = "transport_job",
-                    Location = "global",
-                    PayloadJson = JsonSerializer.Serialize(new { from = perLocationPrices.First().Key, to = perLocationPrices.Last().Key, profit = maxPrice - minPrice, descriptionRu = "Транспортная задача: перевезти зерно для получения прибыли" })
-                };
-                _ = dispatcher.EnqueueAsync(tj);
+                    var job = logisticsQueue.Enqueue(minEntry.LocationId, maxEntry.LocationId, "grain", volume: 15m, expectedProfit: spread);
+                    metrics.Increment("logistics.jobs.enqueued");
+                    var tj = new GameEvent
+                    {
+                        Id = Guid.NewGuid(),
+                        Timestamp = DateTime.UtcNow,
+                        Type = "transport_job",
+                        Location = "global",
+                        PayloadJson = JsonSerializer.Serialize(new
+                        {
+                            jobId = job.Id,
+                            from = job.FromLocationId,
+                            to = job.ToLocationId,
+                            item = job.Item,
+                            volume = job.Volume,
+                            profit = job.ExpectedProfit,
+                            descriptionRu = "Транспортная задача: перевезти товар для получения прибыли"
+                        })
+                    };
+                    _ = dispatcher.EnqueueAsync(tj);
+                }
             }
         }
 
@@ -217,10 +243,14 @@ public class EconomyAgent : IWorldAgent
             // Match orders (best bid vs best ask)
             while (true)
             {
-                var bestBid = await db.MarketOrders.Where(o => o.LocationId == locId && o.Item == item && o.Side == "buy" && o.Status == "open")
-                    .OrderByDescending(o => o.Price).ThenBy(o => o.CreatedAt).FirstOrDefaultAsync(ct);
-                var bestAsk = await db.MarketOrders.Where(o => o.LocationId == locId && o.Item == item && o.Side == "sell" && o.Status == "open")
-                    .OrderBy(o => o.Price).ThenBy(o => o.CreatedAt).FirstOrDefaultAsync(ct);
+                var bids = await db.MarketOrders.Where(o => o.LocationId == locId && o.Item == item && o.Side == "buy" && o.Status == "open")
+                    .ToListAsync(ct);
+                var asks = await db.MarketOrders.Where(o => o.LocationId == locId && o.Item == item && o.Side == "sell" && o.Status == "open")
+                    .ToListAsync(ct);
+
+                // SQLite can have issues ordering by decimal on the server side; order on client side
+                var bestBid = bids.OrderByDescending(o => o.Price).ThenBy(o => o.CreatedAt).FirstOrDefault();
+                var bestAsk = asks.OrderBy(o => o.Price).ThenBy(o => o.CreatedAt).FirstOrDefault();
                 if (bestBid == null || bestAsk == null) break;
                 if (bestBid.Price < bestAsk.Price) break;
 
@@ -261,8 +291,26 @@ public class EconomyAgent : IWorldAgent
                 // Apply final quantity
                 bestBid.Remaining -= affordableQty;
                 bestAsk.Remaining -= affordableQty;
-                if (bestBid.Remaining <= 0) bestBid.Status = "filled"; else bestBid.Status = "partial";
-                if (bestAsk.Remaining <= 0) bestAsk.Status = "filled"; else bestAsk.Status = "partial";
+                if (bestBid.Remaining <= 0)
+                {
+                    bestBid.Status = "filled";
+                    metrics?.Add("economy.orders.active", -1);
+                    metrics?.Increment("economy.orders.filled");
+                }
+                else
+                {
+                    bestBid.Status = "partial";
+                }
+                if (bestAsk.Remaining <= 0)
+                {
+                    bestAsk.Status = "filled";
+                    metrics?.Add("economy.orders.active", -1);
+                    metrics?.Increment("economy.orders.filled");
+                }
+                else
+                {
+                    bestAsk.Status = "partial";
+                }
 
                 // Move inventory seller -> buyer
                 // For reserved qty on ask, inventory is already reduced in order placement; adjust remaining reservation
@@ -330,6 +378,7 @@ public class EconomyAgent : IWorldAgent
             // Sweep expired orders: refund reserved funds/qty
             var now = DateTime.UtcNow;
             var expired = await db.MarketOrders.Where(o => o.LocationId == locId && o.Status == "open" && o.ExpiresAt != null && o.ExpiresAt < now).ToListAsync(ct);
+            var cancelledCount = 0;
             foreach (var ord in expired)
             {
                 ord.Status = "cancelled";
@@ -351,8 +400,14 @@ public class EconomyAgent : IWorldAgent
                     inv.Quantity += ord.ReservedQty;
                     ord.ReservedQty = 0;
                 }
+                cancelledCount++;
             }
-            if (expired.Count > 0) await db.SaveChangesAsync(ct);
+            if (cancelledCount > 0)
+            {
+                await db.SaveChangesAsync(ct);
+                metrics?.Add("economy.orders.active", -cancelledCount);
+                metrics?.Add("economy.orders.cancelled", cancelledCount);
+            }
         }
     }
 }

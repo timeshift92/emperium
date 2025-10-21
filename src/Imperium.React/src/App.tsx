@@ -50,7 +50,7 @@ type ActionStatus = {
   tone: "info" | "success" | "error";
 };
 
-type DevAction = "seedCharacters" | "seedWorld" | "tick";
+type DevAction = "seedCharacters" | "seedWorld" | "tick" | "tickAdvance";
 
 function App() {
   const [activeTab, setActiveTab] = useState<TabKey>("events");
@@ -58,8 +58,10 @@ function App() {
     seedCharacters: false,
     seedWorld: false,
     tick: false,
+    tickAdvance: false,
   });
   const [status, setStatus] = useState<ActionStatus | null>(null);
+  const [toast, setToast] = useState<string | null>(null);
   const [refreshVersion, setRefreshVersion] = useState(0);
   const [focusedCharacterId, setFocusedCharacterId] = useState<string | null>(null);
   const [eventsCharacterIdFilter, setEventsCharacterIdFilter] = useState<string | null>(null);
@@ -70,6 +72,12 @@ function App() {
     const timer = window.setTimeout(() => setStatus(null), 5_000);
     return () => window.clearTimeout(timer);
   }, [status]);
+
+  useEffect(() => {
+    if (!toast) return;
+    const t = window.setTimeout(() => setToast(null), 4000);
+    return () => window.clearTimeout(t);
+  }, [toast]);
 
   const runDevAction = async (action: DevAction) => {
     setPending((prev) => ({ ...prev, [action]: true }));
@@ -88,7 +96,11 @@ function App() {
         ? "/api/dev/seed-characters"
         : action === "seedWorld"
           ? "/api/dev/seed-world"
-          : "/api/dev/tick-now";
+          : action === "tick"
+            ? "/api/dev/tick-now"
+            : action === "tickAdvance"
+              ? "/api/dev/tick-now?advanceTime=true"
+              : "/api/dev/tick-now";
 
     try {
       const res = await fetch(endpoint, { method: "POST" });
@@ -104,6 +116,12 @@ function App() {
               : `Такт обработан (${payload.ticks ?? "n/a"})`,
       });
       setRefreshVersion((prev) => prev + 1);
+      if (action === "tickAdvance") {
+        const wt = payload.worldTime as any;
+        if (wt) {
+          setToast(`Время продвинуто: ${wt.year} год, месяц ${wt.month}, день ${wt.dayOfMonth}, тик ${wt.tick}`);
+        }
+      }
     } catch (err) {
       setStatus({
         tone: "error",
@@ -139,6 +157,30 @@ function App() {
     };
     window.addEventListener("imperium:show-character-events", handler as any);
     return () => window.removeEventListener("imperium:show-character-events", handler as any);
+  }, []);
+
+  // Listen for summary clicks (WorldSidebar)
+  useEffect(() => {
+    const handler = (e: Event) => {
+      const detail = (e as CustomEvent).detail as { type?: string } | undefined;
+      if (!detail?.type) return;
+      // map summary types to event types
+      const mapping: Record<string, string> = {
+        npc_reactions: "npc_reaction",
+        conflict_started: "conflict_started",
+        inheritance_recorded: "inheritance_recorded",
+        legal_rulings: "legal_ruling",
+      };
+      const evType = mapping[detail.type] ?? detail.type;
+      // set events tab filter and switch to events
+      setActiveTab("events");
+      // set the filter to event type
+      setEventsCharacterIdFilter(null);
+      // send message to EventsList via custom event
+      window.dispatchEvent(new CustomEvent("imperium:filter-events-by-type", { detail: { type: evType } }));
+    };
+    window.addEventListener("imperium:show-summary", handler as any);
+    return () => window.removeEventListener("imperium:show-summary", handler as any);
   }, []);
 
   // Focus character event
@@ -192,9 +234,10 @@ function App() {
                   >
                     {pending.seedWorld ? "Создаю мир..." : "Заполнить мир"}
                   </Button>
-                  <Button onClick={() => runDevAction("tick")} disabled={pending.tick}>
-                    {pending.tick ? "Такт..." : "Такт симуляции"}
+          <Button onClick={() => runDevAction("tick")} disabled={pending.tick}>
+            {pending.tick ? "Такт..." : "Такт симуляции"}
                   </Button>
+          <Button onClick={() => runDevAction("tickAdvance")} disabled={pending.tick}>Такт + время</Button>
                 </div>
                 <div className={cn("text-xs", statusToneClass)}>
                   {status?.text ?? "Dev-операции готовы."}
@@ -228,6 +271,12 @@ function App() {
               })}
             </div>
           </nav>
+
+          {toast && (
+            <div className="fixed right-6 top-6 z-50 rounded-md bg-slate-900 px-4 py-2 text-sm text-white shadow">
+              {toast}
+            </div>
+          )}
 
           <main className="flex-1 min-h-0 overflow-hidden bg-slate-50/60 p-4">
             {activeTab === "events" && (

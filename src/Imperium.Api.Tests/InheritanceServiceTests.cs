@@ -73,10 +73,10 @@ namespace Imperium.Api.Tests
         private class TestDispatcher : Imperium.Domain.Services.IEventDispatcher
         {
             public System.Collections.Concurrent.ConcurrentQueue<GameEvent> Enqueued { get; } = new();
-            public Task EnqueueAsync(GameEvent ev)
+            public System.Threading.Tasks.ValueTask EnqueueAsync(GameEvent ev)
             {
                 Enqueued.Enqueue(ev);
-                return Task.CompletedTask;
+                return new System.Threading.Tasks.ValueTask();
             }
         }
     }
