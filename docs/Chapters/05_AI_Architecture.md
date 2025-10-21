@@ -65,3 +65,6 @@ Rumor, Deity, Building, WorldChronicle, GameEvent.
 - LLM-вызовы идут через декоратор `LlmMetricsDecorator`, который создаёт Activity `Imperium.Llm`, считает счётчики (`llm.requests/success/errors/canceled`) и записывает гистограмму `imperium_llm_duration_ms`.
 - Prometheus-скрейп доступен по `/metrics`; дополнительно экспортируются гистограммы длительности тиков (`imperium_tick_duration_ms`) и агентов (`imperium_agent_duration_ms`), счётчики экономики (`imperium_economy.orders.*`), реакции NPC (`npc.replies`), логистика (`logistics.jobs.*`) и новые LLM-счётчики (`imperium_llm_*`).
 - REST-срез `/api/metrics/ticks` возвращает последние измерения длительности тиков (кольцевой буфер на ~120 значений) и используется фронтэндом для визуализации спарклайна в сайдбаре.
+- WorldTime: `TimeAI` теперь публикует дополнительные вычисляемые поля — `month` и `dayOfMonth` в событии `time_tick`.
+- Новые Dev endpoints: `POST /api/dev/tick-now?advanceTime=true` (выполнить все агенты и дополнительно продвинуть TimeAI) и `POST /api/dev/tick-time` (прогон только TimeAI). Ответы содержат `worldTime` для удобства тестов и UI.
+- События времени: `time_tick` (включая `month`/`dayOfMonth`), `day_change`, `month_change`, `year_change` — полезны для сезонных/календарных агентов и UI виджетов.
