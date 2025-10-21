@@ -1,6 +1,0 @@
-
-@tailwind base; @tailwind components; @tailwind utilities;
-:root { --card-border: rgba(139, 92, 46, 0.35); }
-.card { @apply bg-white/80 border rounded-xl border-[color:var(--card-border)] shadow-soft; }
-.section-title { @apply text-lg font-semibold tracking-wide text-zinc-800; }
-.muted { @apply text-sm text-zinc-600; }
