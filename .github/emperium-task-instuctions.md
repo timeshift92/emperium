@@ -161,6 +161,8 @@
   - `EmpireGenesisService`: генерация ранних империй из `city_state` с армиями, налоговой политикой и LLM-driven founding myths.
   - `Faction` расширена: `ParentFactionId`, `TaxPolicyJson`, `LocationId`.
   - Новая модель `TradeRoute` и миграция `20251021120000_AddTradeRoutesAndFactionFields` добавлены к проекту и в `migrations.sql`.
+   - `EmpireGenesisService`: генерация ранних империй из `city_state` с армиями, налоговой политикой и LLM-driven founding myths; интеграционные тесты и идемпотентность реализованы.
+   - В процессе: чистка временных миграций (убрано `TempSync`) и синхронизация записей в `__EFMigrationsHistory`.
 
 - **Frontend**
   - `NpcProfiles.tsx`: список, профиль, live‑timeline (SSE + авто-реконнект).
