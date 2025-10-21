@@ -304,6 +304,25 @@ using (var scope = app.Services.CreateScope())
         var logger = scope.ServiceProvider.GetService<Microsoft.Extensions.Logging.ILoggerFactory>()?.CreateLogger("Program.TribesGenesis");
         logger?.LogError(ex, "Tribes genesis failed: {Message}", ex.Message);
     }
+    try
+    {
+        await Imperium.Infrastructure.Setup.CivilizationGenesisService.InitializeAsync(db);
+    }
+    catch (Exception ex)
+    {
+        var logger = scope.ServiceProvider.GetService<Microsoft.Extensions.Logging.ILoggerFactory>()?.CreateLogger("Program.CivilizationGenesis");
+        logger?.LogError(ex, "Civilization genesis failed: {Message}", ex.Message);
+    }
+    try
+    {
+        var llm = scope.ServiceProvider.GetService<Imperium.Llm.ILlmClient>();
+        await Imperium.Infrastructure.Setup.EmpireGenesisService.InitializeAsync(db, llm);
+    }
+    catch (Exception ex)
+    {
+        var logger = scope.ServiceProvider.GetService<Microsoft.Extensions.Logging.ILoggerFactory>()?.CreateLogger("Program.EmpireGenesis");
+        logger?.LogError(ex, "Empire genesis failed: {Message}", ex.Message);
+    }
     }
     catch (Exception ex)
     {
@@ -337,7 +356,7 @@ app.Use(async (context, next) =>
             context.Response.ContentType = "application/json";
             var payload = new { error = "internal_server_error", message = ex.Message };
             var json = System.Text.Json.JsonSerializer.Serialize(payload);
-            await context.Response.WriteAsync(json);
+            await  context.Response.WriteAsync(json);
         }
         else
         {
@@ -433,6 +452,20 @@ app.MapGet("/api/chronicles/latest", async (Imperium.Infrastructure.ImperiumDbCo
     if (item == null) return Results.NotFound();
     return Results.Json(item);
 }).WithName("GetLatestChronicle");
+
+// Factions (read-only)
+app.MapGet("/api/factions", async (Imperium.Infrastructure.ImperiumDbContext db) =>
+{
+    var items = await db.Factions.OrderBy(f => f.Name).ToListAsync();
+    return Results.Json(items);
+}).WithName("GetFactions");
+
+// Rumors (read-only)
+app.MapGet("/api/rumors", async (Imperium.Infrastructure.ImperiumDbContext db) =>
+{
+    var items = await db.Rumors.OrderByDescending(r => r.CreatedAt).Take(50).ToListAsync();
+    return Results.Json(items);
+}).WithName("GetRumors");
 
 // Queue metrics: processed, dropped, average processing time
 app.MapGet("/api/metrics/queue", (Imperium.Api.MetricsService metrics, Imperium.Api.Services.NpcReplyQueueService queue) =>

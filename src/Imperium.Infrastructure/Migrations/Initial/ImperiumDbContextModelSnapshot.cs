@@ -17,6 +17,30 @@ namespace Imperium.Infrastructure.Migrations.Initial
 #pragma warning disable 612, 618
             modelBuilder.HasAnnotation("ProductVersion", "9.0.10");
 
+            modelBuilder.Entity("Imperium.Domain.Models.Army", b =>
+                {
+                    b.Property<Guid>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("TEXT");
+
+                    b.Property<Guid>("FactionId")
+                        .HasColumnType("TEXT");
+
+                    b.Property<int>("Manpower")
+                        .HasColumnType("INTEGER");
+
+                    b.Property<decimal>("Morale")
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("Type")
+                        .IsRequired()
+                        .HasColumnType("TEXT");
+
+                    b.HasKey("Id");
+
+                    b.ToTable("Army");
+                });
+
             modelBuilder.Entity("Imperium.Domain.Models.Building", b =>
                 {
                     b.Property<Guid>("Id")
@@ -139,8 +163,17 @@ namespace Imperium.Infrastructure.Migrations.Initial
                         .ValueGeneratedOnAdd()
                         .HasColumnType("TEXT");
 
+                    b.Property<Guid?>("LocationId")
+                        .HasColumnType("TEXT");
+
                     b.Property<string>("Name")
                         .IsRequired()
+                        .HasColumnType("TEXT");
+
+                    b.Property<Guid?>("ParentFactionId")
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("TaxPolicyJson")
                         .HasColumnType("TEXT");
 
                     b.Property<string>("Type")
@@ -356,6 +389,10 @@ namespace Imperium.Infrastructure.Migrations.Initial
                 {
                     b.Property<Guid>("Id")
                         .ValueGeneratedOnAdd()
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("Biome")
+                        .IsRequired()
                         .HasColumnType("TEXT");
 
                     b.Property<string>("Culture")
@@ -664,6 +701,32 @@ namespace Imperium.Infrastructure.Migrations.Initial
                     b.HasKey("Id");
 
                     b.ToTable("Trades");
+                });
+
+            modelBuilder.Entity("Imperium.Domain.Models.TradeRoute", b =>
+                {
+                    b.Property<Guid>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("TEXT");
+
+                    b.Property<Guid>("FromLocationId")
+                        .HasColumnType("TEXT");
+
+                    b.Property<Guid>("OwnerFactionId")
+                        .HasColumnType("TEXT");
+
+                    b.Property<Guid>("ToLocationId")
+                        .HasColumnType("TEXT");
+
+                    b.Property<decimal>("Toll")
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("Transport")
+                        .HasColumnType("TEXT");
+
+                    b.HasKey("Id");
+
+                    b.ToTable("TradeRoutes");
                 });
 
             modelBuilder.Entity("Imperium.Domain.Models.WeatherSnapshot", b =>

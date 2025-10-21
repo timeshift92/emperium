@@ -31,6 +31,7 @@
 [x] WeatherAI/WorldAI — погода, длина дня, аномалии
 [x] SeasonAI — сезон по климату/гео
 [x] EconomyAI — цены, налоги, запасы
+[x] CivilizationGenesisService — продвижение племён в городские государства и создание ранней экономики
 [x] RelationshipAI — marriage/betrayal/child_birth
 [x] NpcAI — короткие реплики (<=35 слов, эпохальный стиль)
 [x] EventDispatcher — запись/стрим `GameEvent`
@@ -117,6 +118,8 @@
 [ ] Нагрузочный режим “1000 тиков без ошибок” + отчёт
 [ ] Фейковые LLM-клиенты и детерминированные сиды для офлайна
   [x] Юнит/интеграционные тесты: добавлены тесты на устойчивость агентов при падении LLM (in-memory SQLite shared)
+  [x] Интеграционный тест: `CivilizationGenesis_IsIdempotent_OnSecondRun` — проверка идемпотентности
+  [x] Интеграционный тест: `CivilizationGenesis_CreatesValidTradeRoutesAndReserves` — проверки запасов/цен/слухов/сделок
 
 ## 12) MVP-валидатор
 [ ] 1000 тиков без ошибок
@@ -155,6 +158,9 @@
   - Frontend: `WorldSidebar` показывает месяц/день месяца; карточки сводки кликабельны и фильтруют `EventsList`; добавлен toast при "Такт + время".
   - UI: исправлены ошибки TypeScript в `NpcCanvas`, `NpcMap`, `CharacterFocus`.
   - Сборка и тесты: `dotnet test` и сборка фронтенда (`npm build`) проходят локально.
+  - `EmpireGenesisService`: генерация ранних империй из `city_state` с армиями, налоговой политикой и LLM-driven founding myths.
+  - `Faction` расширена: `ParentFactionId`, `TaxPolicyJson`, `LocationId`.
+  - Новая модель `TradeRoute` и миграция `20251021120000_AddTradeRoutesAndFactionFields` добавлены к проекту и в `migrations.sql`.
 
 - **Frontend**
   - `NpcProfiles.tsx`: список, профиль, live‑timeline (SSE + авто-реконнект).
@@ -232,6 +238,7 @@
 
 ## 17) Следующие шаги
 [x] Household UI: инвентарь семьи, создание/отмена ордеров от household (панель в Imperium.Web + API-хелперы)
+[x] Civilization genesis: seed внедрён, API `GET /api/factions` и `GET /api/rumors` добавлены
 [x] Character Focus+: мини‑граф связей и фильтр коммуникаций по собеседнику (новый React-панель + граф)
 [x] Заказ/отмена ордеров с фронта (POST/DELETE), показ TTL/пошлины (EconomyPanel: форма, TTL, отмена, комиссия)
 [x] Treasury/Logistics: очередь и резерв бюджета, конфиг матрицы расстояний (LogisticsQueueService, LogisticsOptions, API `/api/logistics/jobs`, события)

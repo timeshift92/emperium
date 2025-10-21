@@ -14,8 +14,15 @@ public class MockFallbackProvider : IFallbackLlmProvider
     public ILlmClient? GetFallback()
     {
         // Prefer a registered MockLlmClient if available
-        var mock = _sp.GetService<MockLlmClient>();
-        if (mock != null) return mock;
+        try
+        {
+            var mock = _sp.GetService<MockLlmClient>();
+            if (mock != null) return mock;
+        }
+        catch (ObjectDisposedException)
+        {
+            // service provider disposed - fall back to creating a new mock instance
+        }
         // Fallback to a generic MockLlmClient instance
         return new MockLlmClient();
     }

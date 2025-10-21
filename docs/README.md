@@ -12,6 +12,7 @@
  - `Inheritance_Distribution.md` — описание правил распределения наследства (wealth и assets)
  - `08_Economy_Items_and_Definitions.md` — справочник динамических товаров и API для управления ними
  - `05_AI_Architecture.md` — архитектура агентов и новый time model (месяцы/дни)
+ - `CivilizationGenesisService` — раннее создание городов и экономика (добавлен в 05)
 
 Новое: `TimeAI` публикует `month` и `dayOfMonth` в `time_tick`; есть dev endpoints для прогонки тика `tick-now` и `tick-time` (TimeAI-only).
 
@@ -31,3 +32,5 @@ pandoc -s Imperium_Book_Index.md -o Imperium_Design_Bible_v1.pdf --from markdown
   - Prometheus-скрейп по `/metrics` с гистограммами тиков (`imperium_tick_duration_ms`), агентов (`imperium_agent_duration_ms`) и LLM (`imperium_llm_duration_ms`), а также счётчиками `imperium_*`.
   - REST-срез `/api/metrics/ticks` возвращает последние длительности тиков и используется фронтом для спарклайна.
 - Реальные события стримятся через SignalR `/hubs/events`; при недоступности хаба UI автоматически переключается на мок-стрим (SSE эндпоинты остаются для совместимости).
+
+Changelog: добавлены `CivilizationGenesisService` и интеграционные тесты на идемпотентность и валидацию экономических маршрутов.
