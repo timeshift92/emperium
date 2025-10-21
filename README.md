@@ -34,6 +34,7 @@ OPENAI_API_KEY=sk-... docker compose up --build
  - `POST /api/economy/item-defs` — создать/обновить определение товара (JSON в теле запроса)
 - `GET /metrics` — Prometheus-совместимые метрики (OpenTelemetry)
 - `SignalR /hubs/events` — поток `GameEvent`/`WeatherSnapshot` в реальном времени
+ - Dev endpoints: `POST /api/dev/tick-now?advanceTime=true|false` — прогнать все агенты (опционально Advance WorldTime), `POST /api/dev/tick-time` — прогон только TimeAI
     
 Weather POST will be added to allow manual override in future updates.
 ```json
@@ -60,6 +61,26 @@ Weather POST will be added to allow manual override in future updates.
 - Используйте эндпоинты `/api/economy/item-defs` для просмотра и управления метаданными товаров. Агенты (Production, Consumption, Economy) используют эти определения в реальном времени.
 
 Удачи! 👑
+
+Dev endpoints (для разработки)
+ - POST /api/dev/tick-now?advanceTime=true
+    - Выполняет один full tick — вызывает зарегистрированные IWorldAgent в порядке Time→World→Season→…
+    - Параметр advanceTime=true дополнительно продвигает WorldTime (TimeAI).
+    - Возвращает объект с текущим `worldTime` и краткой статистикой тика.
+    Пример ответа:
+    ```json
+    {
+       "worldTime": { "tick": 1234, "hour": 10, "day": 5, "year": 1, "isDaytime": true, "month": 2, "dayOfMonth": 14 },
+       "eventsPublished": 12
+    }
+    ```
+
+ - POST /api/dev/tick-time
+    - Прогон только TimeAI (без остальных агентов). Возвращает `worldTime`.
+
+Использование:
+ - Легко триггерить тик с помощью скриптов или UI (например, кнопка в `Imperium.React`).
+ - В тестах удобно выставлять `advanceTime=true` для синхронных проверок событий, связанных с сменой дня/месяца.
 
 ## Docs и вклад
 - CONTRIBUTING: https://github.com/timeshift92/emperium/blob/main/CONTRIBUTING.md

@@ -140,6 +140,8 @@
   - `RoleLlmRouter`: роутинг role → model, поддержка Ollama/OpenAI (fallback + логирование).
   - `RoleLlmRouter`: добавлена генерация per-request traceId и лог-скоуп; traceId виден в логах EF Core / HTTP / агентов.
   - `NpcAgent`: строгие JSON-ответы, уменьшено число reask, таймауты и парсинг `characterId/essence/skills/history`.
+  - `NpcEssence`: расширен — добавлены поля `Mood`, `Energy`, `Motivation`, `LastAction`; используются для автономного поведения NPC.
+  - `NpcBehaviorAgent`: автономная логика NPC (LLM-driven actions), обновляет `NpcEssence` и публикует `npc_action` GameEvent; реализован в `Imperium.Api` чтобы избежать циклической зависимости Domain→Infrastructure.
   - `NpcAgent`: исправлены ошибки компиляции, LLM-вызовы обёрнуты per-agent таймаутом; длинные EF-вызовы больше не получают per-agent CancellationToken.
   - Автоматическая миграция БД при старте (`db.Database.Migrate()`), расширение `Character`.
   - Эндпоинты для персонажей, событий, дев-операций; SSE `/api/events/stream`.
@@ -150,6 +152,7 @@
   - `MetricsService`: кольцевой буфер длительностей тиков и LLM, REST-срез `/api/metrics/ticks`, гистограмма `imperium_llm_duration_ms`, счётчики `llm.requests/success/errors/canceled`.
   - `LlmMetricsDecorator` + `TickWorker`: OpenTelemetry Activity (`Imperium.Llm`, `Imperium.TickWorker`) с метками успехов/ошибок агентов и длительностями.
   - `EconomyStateService`: расширенный сид-список (~100 товаров) подхватывается из `appsettings.json` (`Economy.Items`), обновлена документация.
+    - Документация: README и `docs/` обновлены — добавлены примеры Dev endpoints (`/api/dev/tick-now`, `/api/dev/tick-time`) и пример ответа `worldTime`.
   - `EconomyItemDefinition`: добавлены поля `weightPerUnit`, `perishableDays`, `stackSize`, `category` и валидация на API.
   - Frontend: добавлена панель `ItemDefsPanel` в `EconomyPanel` для просмотра/редактирования определений товаров.
 
@@ -173,6 +176,8 @@
 - **Dev / Tooling**
   - PowerShell-скрипты `smoke-test.ps1`, `check-apis.ps1`.
   - Документация по запуску API в foreground/background, helper шаги.
+  - Тестирование: добавлены интеграционные тесты (`AgentEventTests`) для `SeasonAI` и `NpcAI`, `TestEventDispatcher` для детерминированной записи событий и `MockLlmClient` для стабильных ответов.
+  - Результат: запуск `dotnet test` по решению прошёл успешно (все тесты зелёные).
 
 ## Примечания / риски
 - LLM иногда возвращает латиницу — `NpcAgent` смягчён, но нужно дальнейшее улучшение промптов.

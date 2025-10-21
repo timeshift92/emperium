@@ -10,4 +10,11 @@ public class NpcEssence
     public int Vitality { get; set; }
     public int Luck { get; set; }
     public double MutationChance { get; set; }
+    // Behavioral state
+    public string Mood { get; set; } = "neutral";
+    public string? LastAction { get; set; }
+    // Energy [0..1]
+    public double Energy { get; set; } = 1.0;
+    // Motivation [0..1]
+    public double Motivation { get; set; } = 1.0;
 }
