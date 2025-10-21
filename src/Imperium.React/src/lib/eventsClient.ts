@@ -10,11 +10,6 @@ class EventsClient {
   private connectionStateHandlers = new Set<(connected: boolean) => void>();
   private fallbackEventsSse?: EventSource;
   private fallbackWeatherSse?: EventSource;
-  private batchedTypes = new Set<string>(["trade_executed", "order_placed"]);
-  private batchIntervalMs = 300;
-  private batchBuffers = new Map<string, any[]>();
-  private batchTimers = new Map<string, number>();
-  private batchHandlers = new Map<string, Set<(events: any[]) => void>>();
 
   async start() {
     if (this.connection) return;
@@ -36,7 +31,7 @@ class EventsClient {
     });
 
   // bind default messages
-  this.connection.on("event", (ev: any) => this.receiveEvent(ev));
+  this.connection.on("event", (ev: any) => this.emitEvent(ev));
   this.connection.on("weather", (w: any) => this.emitWeather(w));
 
     try {
@@ -71,7 +66,7 @@ class EventsClient {
       es.onmessage = (e) => {
         try {
           const data = JSON.parse(e.data);
-          this.receiveEvent(data);
+          this.emitEvent(data);
         } catch {}
       };
       this.fallbackEventsSse = es;
@@ -79,42 +74,6 @@ class EventsClient {
     try {
       const es2 = new EventSource("/api/weather/stream");
       es2.onmessage = (e) => {
-
-  receiveEvent(ev: any) {
-    const type = ev?.Type ?? ev?.type ?? "unknown";
-    if (this.batchedTypes.has(type)) {
-      let buf = this.batchBuffers.get(type);
-      if (!buf) { buf = []; this.batchBuffers.set(type, buf); }
-      buf.push(ev);
-      if (!this.batchTimers.has(type)) {
-        const timer = window.setTimeout(() => this.flushBatch(type), this.batchIntervalMs);
-        this.batchTimers.set(type, timer as unknown as number);
-      }
-    } else {
-      this.emitEvent(ev);
-    }
-  }
-
-  flushBatch(type: string) {
-    const buf = this.batchBuffers.get(type) ?? [];
-    if (buf.length === 0) {
-      this.batchBuffers.delete(type);
-      this.batchTimers.delete(type);
-      return;
-    }
-    // notify batch handlers
-    const handlers = this.batchHandlers.get(type);
-    if (handlers) {
-      for (const h of handlers) h(buf.slice());
-    }
-    // also notify generic handlers bound to "*batch"
-    const g = this.batchHandlers.get("*batch");
-    if (g) for (const h of g) h(buf.slice());
-    // clear buffer and timer
-    this.batchBuffers.delete(type);
-    const t = this.batchTimers.get(type);
-    if (t) { window.clearTimeout(t); this.batchTimers.delete(type); }
-  }
         try {
           const data = JSON.parse(e.data);
           this.emitWeather(data);
@@ -150,17 +109,6 @@ class EventsClient {
   }
 
   onWeather(cb: EventHandler<any>) {
-
-  onBatch(type: string, cb: (events: any[]) => void) {
-    let set = this.batchHandlers.get(type);
-    if (!set) { set = new Set(); this.batchHandlers.set(type, set); }
-    set.add(cb);
-    return () => { set!.delete(cb); };
-  }
-
-  getBatchedTypes() {
-    return Array.from(this.batchedTypes);
-  }
     this.weatherHandlers.add(cb);
   return () => { this.weatherHandlers.delete(cb); };
   }
