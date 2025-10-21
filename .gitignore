@@ -73,6 +73,3 @@ bower_components/
 # OS files
 .DS_Store
 Thumbs.db
-imperium.db
-imperium.db-shm
-imperium.db-wal
