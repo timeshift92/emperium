@@ -1,9 +1,10 @@
-import { useEffect, useMemo, useState } from "react";
+import { useMemo, useState } from "react";
 import WeatherCard from "@/components/WeatherCard";
 import { cn } from "@/lib/utils";
 import { useLatestEvent } from "@/lib/useLatestEvent";
 import eventsClient from "@/lib/eventsClient";
 import { useWeather } from "@/lib/useEvents";
+import { useEffect } from "react";
 
 type WorldSidebarProps = {
   className?: string;
@@ -67,6 +68,19 @@ export default function WorldSidebar({ className }: WorldSidebarProps) {
   } | null>(null);
   const [tickMetricsError, setTickMetricsError] = useState<string | null>(null);
   const [connected, setConnected] = useState<boolean | null>(null);
+  const [latestMyth, setLatestMyth] = useState<string | null>(null);
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      try {
+        const r = await fetch('/api/chronicles/latest');
+        if (!r.ok) return;
+        const data = await r.json();
+        if (!cancelled) setLatestMyth(data.summary ? (typeof data.summary === 'string' ? data.summary : JSON.stringify(data.summary)) : null);
+      } catch { }
+    })();
+    return () => { cancelled = true; };
+  }, []);
   useEffect(() => {
     let cancelled = false;
     let timer: number | null = null;
@@ -223,6 +237,20 @@ export default function WorldSidebar({ className }: WorldSidebarProps) {
           {timeInfo.error && (
             <div className="mt-2 text-xs text-red-500">{timeInfo.error}</div>
           )}
+        </section>
+
+        <section>
+          <div className="text-sm font-semibold text-slate-700">Миф эпохи</div>
+          <div className="mt-2 text-sm text-slate-500">
+            {latestMyth ? (
+              <div className="text-sm text-slate-700">{latestMyth}</div>
+            ) : (
+              <div className="text-sm text-slate-500">Миф пока не создан</div>
+            )}
+            <div className="mt-2 text-xs">
+              <a href="#/myths" className="text-blue-600 underline">Читать мифы</a>
+            </div>
+          </div>
         </section>
 
         <section>

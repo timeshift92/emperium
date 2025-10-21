@@ -117,20 +117,22 @@ export default function EconomyPanel({ className }: EconomyPanelProps) {
 
   // Live refresh orderbook/trades on stream events (debounced & filtered)
   useEffect(() => {
+    // When a batch arrives, we can quickly inspect events and decide whether to trigger reload
     let debounce: number | null = null;
-    const handler = (ev: any) => {
+    const handler = (evs: any[]) => {
       try {
-        const payloadRaw = ev?.PayloadJson ?? ev?.payload ?? ev?.Payload ?? null;
-        let payload: any = payloadRaw;
-        if (typeof payloadRaw === 'string') {
-          try { payload = JSON.parse(payloadRaw); } catch { payload = null; }
-        }
-        const evItem = payload?.item ?? payload?.Item ?? undefined;
-        const evLoc = payload?.location ?? payload?.Location ?? undefined;
-        if (evItem && evItem !== selectedItem) return; // skip other items
-        if (evLoc && selectedLocation !== 'all' && evLoc !== selectedLocation) return; // skip other locations
-        if (debounce) window.clearTimeout(debounce);
-        debounce = window.setTimeout(() => {
+        for (const ev of evs) {
+          const payloadRaw = ev?.PayloadJson ?? ev?.payload ?? ev?.Payload ?? null;
+          let payload: any = payloadRaw;
+          if (typeof payloadRaw === 'string') {
+            try { payload = JSON.parse(payloadRaw); } catch { payload = null; }
+          }
+          const evItem = payload?.item ?? payload?.Item ?? undefined;
+          const evLoc = payload?.location ?? payload?.Location ?? undefined;
+          if (evItem && evItem !== selectedItem) continue; // skip other items
+          if (evLoc && selectedLocation !== 'all' && evLoc !== selectedLocation) continue; // skip other locations
+          if (debounce) window.clearTimeout(debounce);
+          debounce = window.setTimeout(() => {
           // call loader by toggling selectedItem (cheap) — but better to call fetch directly
           (async () => {
             setLoadingBook(true);
@@ -148,11 +150,14 @@ export default function EconomyPanel({ className }: EconomyPanelProps) {
             } catch {}
             finally { setLoadingBook(false); }
           })();
-        }, 350);
+          }, 350);
+          // only need to process one matching event per batch
+          break;
+        }
       } catch {}
     };
-    const off1 = eventsClient.onEvent('order_placed', handler);
-    const off2 = eventsClient.onEvent('trade_executed', handler);
+    const off1 = eventsClient.onEventBatch('order_placed', handler);
+    const off2 = eventsClient.onEventBatch('trade_executed', handler);
     return () => {
       off1(); off2(); if (debounce) window.clearTimeout(debounce);
     };

@@ -17,6 +17,7 @@
 
   <ItemGroup>
     <ProjectReference Include="..\Imperium.Domain\Imperium.Domain.csproj" />
+    <ProjectReference Include="..\Imperium.Llm\Imperium.Llm.csproj" />
   </ItemGroup>
 
 </Project>

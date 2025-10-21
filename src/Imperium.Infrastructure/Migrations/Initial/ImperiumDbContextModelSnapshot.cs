@@ -17,6 +17,24 @@ namespace Imperium.Infrastructure.Migrations.Initial
 #pragma warning disable 612, 618
             modelBuilder.HasAnnotation("ProductVersion", "9.0.10");
 
+            modelBuilder.Entity("Imperium.Domain.Models.Building", b =>
+                {
+                    b.Property<Guid>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("Kind")
+                        .IsRequired()
+                        .HasColumnType("TEXT");
+
+                    b.Property<Guid?>("LocationId")
+                        .HasColumnType("TEXT");
+
+                    b.HasKey("Id");
+
+                    b.ToTable("Buildings");
+                });
+
             modelBuilder.Entity("Imperium.Domain.Models.Character", b =>
                 {
                     b.Property<Guid>("Id")
@@ -98,6 +116,12 @@ namespace Imperium.Infrastructure.Migrations.Initial
                         .IsRequired()
                         .HasColumnType("TEXT");
 
+                    b.Property<string>("ResourcesJson")
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("TaxesJson")
+                        .HasColumnType("TEXT");
+
                     b.Property<DateTime>("Timestamp")
                         .HasColumnType("TEXT");
 
@@ -107,6 +131,25 @@ namespace Imperium.Infrastructure.Migrations.Initial
                     b.HasKey("Id");
 
                     b.ToTable("EconomySnapshots");
+                });
+
+            modelBuilder.Entity("Imperium.Domain.Models.Faction", b =>
+                {
+                    b.Property<Guid>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("Name")
+                        .IsRequired()
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("Type")
+                        .IsRequired()
+                        .HasColumnType("TEXT");
+
+                    b.HasKey("Id");
+
+                    b.ToTable("Factions");
                 });
 
             modelBuilder.Entity("Imperium.Domain.Models.Family", b =>
@@ -294,10 +337,29 @@ namespace Imperium.Infrastructure.Migrations.Initial
                     b.ToTable("Inventories");
                 });
 
+            modelBuilder.Entity("Imperium.Domain.Models.KnowledgeField", b =>
+                {
+                    b.Property<Guid>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("Name")
+                        .IsRequired()
+                        .HasColumnType("TEXT");
+
+                    b.HasKey("Id");
+
+                    b.ToTable("KnowledgeFields");
+                });
+
             modelBuilder.Entity("Imperium.Domain.Models.Location", b =>
                 {
                     b.Property<Guid>("Id")
                         .ValueGeneratedOnAdd()
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("Culture")
+                        .IsRequired()
                         .HasColumnType("TEXT");
 
                     b.Property<double?>("Latitude")
@@ -381,6 +443,38 @@ namespace Imperium.Infrastructure.Migrations.Initial
                     b.HasIndex("LocationId", "Item", "Side", "Price");
 
                     b.ToTable("MarketOrders");
+                });
+
+            modelBuilder.Entity("Imperium.Domain.Models.NpcEssence", b =>
+                {
+                    b.Property<Guid>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("TEXT");
+
+                    b.Property<Guid>("CharacterId")
+                        .HasColumnType("TEXT");
+
+                    b.Property<int>("Charisma")
+                        .HasColumnType("INTEGER");
+
+                    b.Property<int>("Intelligence")
+                        .HasColumnType("INTEGER");
+
+                    b.Property<int>("Luck")
+                        .HasColumnType("INTEGER");
+
+                    b.Property<double>("MutationChance")
+                        .HasColumnType("REAL");
+
+                    b.Property<int>("Strength")
+                        .HasColumnType("INTEGER");
+
+                    b.Property<int>("Vitality")
+                        .HasColumnType("INTEGER");
+
+                    b.HasKey("Id");
+
+                    b.ToTable("NpcEssences");
                 });
 
             modelBuilder.Entity("Imperium.Domain.Models.NpcMemory", b =>
@@ -488,6 +582,24 @@ namespace Imperium.Infrastructure.Migrations.Initial
                     b.ToTable("Relationships");
                 });
 
+            modelBuilder.Entity("Imperium.Domain.Models.Rumor", b =>
+                {
+                    b.Property<Guid>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("Content")
+                        .IsRequired()
+                        .HasColumnType("TEXT");
+
+                    b.Property<DateTime>("CreatedAt")
+                        .HasColumnType("TEXT");
+
+                    b.HasKey("Id");
+
+                    b.ToTable("Rumors");
+                });
+
             modelBuilder.Entity("Imperium.Domain.Models.SeasonState", b =>
                 {
                     b.Property<Guid>("Id")
@@ -564,6 +676,9 @@ namespace Imperium.Infrastructure.Migrations.Initial
                         .IsRequired()
                         .HasColumnType("TEXT");
 
+                    b.Property<double>("DayLengthHours")
+                        .HasColumnType("REAL");
+
                     b.Property<double>("PrecipitationMm")
                         .HasColumnType("REAL");
 
@@ -579,6 +694,24 @@ namespace Imperium.Infrastructure.Migrations.Initial
                     b.HasKey("Id");
 
                     b.ToTable("WeatherSnapshots");
+                });
+
+            modelBuilder.Entity("Imperium.Domain.Models.WorldChronicle", b =>
+                {
+                    b.Property<Guid>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("Summary")
+                        .IsRequired()
+                        .HasColumnType("TEXT");
+
+                    b.Property<int>("Year")
+                        .HasColumnType("INTEGER");
+
+                    b.HasKey("Id");
+
+                    b.ToTable("WorldChronicles");
                 });
 
             modelBuilder.Entity("Imperium.Domain.Models.WorldTime", b =>

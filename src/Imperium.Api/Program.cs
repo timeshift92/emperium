@@ -225,6 +225,33 @@ using (var scope = app.Services.CreateScope())
     }
     catch { /* ignore */ }
 
+    // Defensive: ensure Locations table has Biome and Culture columns if DB was created before these fields were added
+    try
+    {
+        var conn = db.Database.GetDbConnection();
+        conn.Open();
+        using (var cmd = conn.CreateCommand())
+        {
+            cmd.CommandText = "PRAGMA table_info('Locations');";
+            using var reader = cmd.ExecuteReader();
+            var columns = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+            while (reader.Read())
+            {
+                // PRAGMA table_info returns: cid, name, type, notnull, dflt_value, pk
+                columns.Add(reader.GetString(1));
+            }
+            if (!columns.Contains("Biome"))
+            {
+                db.Database.ExecuteSqlRaw("ALTER TABLE Locations ADD COLUMN Biome TEXT DEFAULT 'unknown';");
+            }
+            if (!columns.Contains("Culture"))
+            {
+                db.Database.ExecuteSqlRaw("ALTER TABLE Locations ADD COLUMN Culture TEXT DEFAULT 'unknown';");
+            }
+        }
+    }
+    catch { /* ignore - best effort for dev convenience */ }
+
     // Seed simple test characters for development so NpcAgent has targets
     try
     {
@@ -253,6 +280,35 @@ using (var scope = app.Services.CreateScope())
     catch
     {
         // best-effort seeding — ignore failures in production-like environments
+    }
+
+    // World genesis: initialize full world on fresh DB
+    try
+    {
+    await WorldGenesisService.InitializeAsync(db, scope.ServiceProvider);
+        try
+    {
+        await Imperium.Infrastructure.Setup.NatureGenesisService.InitializeAsync(db, scope.ServiceProvider);
+    }
+    catch (Exception ex)
+    {
+        var logger = scope.ServiceProvider.GetService<Microsoft.Extensions.Logging.ILoggerFactory>()?.CreateLogger("Program.NatureGenesis");
+        logger?.LogError(ex, "Nature genesis failed: {Message}", ex.Message);
+    }
+    try
+    {
+        await Imperium.Infrastructure.Setup.TribesGenesisService.InitializeAsync(db);
+    }
+    catch (Exception ex)
+    {
+        var logger = scope.ServiceProvider.GetService<Microsoft.Extensions.Logging.ILoggerFactory>()?.CreateLogger("Program.TribesGenesis");
+        logger?.LogError(ex, "Tribes genesis failed: {Message}", ex.Message);
+    }
+    }
+    catch (Exception ex)
+    {
+        var logger = scope.ServiceProvider.GetService<Microsoft.Extensions.Logging.ILoggerFactory>()?.CreateLogger("Program.WorldGenesis");
+        logger?.LogError(ex, "World genesis failed: {Message}", ex.Message);
     }
 }
 
@@ -363,6 +419,20 @@ app.MapGet("/api/metrics/ticks", (Imperium.Api.MetricsService metrics) =>
     var last = samples.Length > 0 ? samples[^1] : 0;
     return Results.Json(new { durationsMs = samples, averageMs = average, lastMs = last });
 }).WithName("GetTickMetrics");
+
+// Chronicles: latest myth and list
+app.MapGet("/api/chronicles", async (Imperium.Infrastructure.ImperiumDbContext db) =>
+{
+    var items = await db.WorldChronicles.OrderByDescending(c => c.Year).Take(50).ToListAsync();
+    return Results.Json(items);
+}).WithName("GetChronicles");
+
+app.MapGet("/api/chronicles/latest", async (Imperium.Infrastructure.ImperiumDbContext db) =>
+{
+    var item = await db.WorldChronicles.OrderByDescending(c => c.Year).FirstOrDefaultAsync();
+    if (item == null) return Results.NotFound();
+    return Results.Json(item);
+}).WithName("GetLatestChronicle");
 
 // Queue metrics: processed, dropped, average processing time
 app.MapGet("/api/metrics/queue", (Imperium.Api.MetricsService metrics, Imperium.Api.Services.NpcReplyQueueService queue) =>

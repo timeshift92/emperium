@@ -7,12 +7,12 @@ export function useEvents() {
   const [events, setEvents] = useState<RawEvent[]>([]);
   useEffect(() => {
     let mounted = true;
-    const handle = (ev: RawEvent) => {
+    const handle = (evs: RawEvent[]) => {
       if (!mounted) return;
-      setEvents((prev) => [ev, ...prev].slice(0, 500));
+      setEvents((prev) => [...evs, ...prev].slice(0, 500));
     };
-    // generic subscribe for all events
-    const off = eventsClient.onEvent("*", handle);
+    // batched generic subscribe for all events
+    const off = eventsClient.onEventBatch("*", handle);
     // try to connect
     eventsClient.start().catch(() => {});
     return () => {
