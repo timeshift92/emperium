@@ -1,0 +1,13 @@
+namespace Imperium.Domain.Models;
+
+public class NpcEssence
+{
+    public Guid Id { get; set; }
+    public Guid CharacterId { get; set; }
+    public int Strength { get; set; }
+    public int Intelligence { get; set; }
+    public int Charisma { get; set; }
+    public int Vitality { get; set; }
+    public int Luck { get; set; }
+    public double MutationChance { get; set; }
+}

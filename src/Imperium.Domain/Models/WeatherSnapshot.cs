@@ -8,4 +8,5 @@ public class WeatherSnapshot
     public int TemperatureC { get; set; }
     public int WindKph { get; set; }
     public double PrecipitationMm { get; set; }
+    public double DayLengthHours { get; set; }
 }

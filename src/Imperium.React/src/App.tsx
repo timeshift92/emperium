@@ -5,6 +5,7 @@ import EconomyPanel from "@/components/EconomyPanel";
 import NpcMap from "@/components/NpcMap";
 import NpcProfiles from "@/components/NpcProfiles";
 import WorldSidebar from "@/components/WorldSidebar";
+import EpochMythsPanel from "@/components/EpochMythsPanel";
 import HouseholdsPanel from "@/components/HouseholdsPanel";
 import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
@@ -19,6 +20,8 @@ const TABS: { key: TabKey; title: string; description: string }[] = [
     title: "События",
     description: "Живая лента GameEvent.",
   },
+
+  
   {
     key: "characters",
     title: "Персонажи",
@@ -80,6 +83,15 @@ function App() {
       // ignore start errors; fallback will be used
     });
     return () => eventsClient.stop();
+  }, []);
+
+  // simple router: if hash == #/myths show myths panel
+  const [showMyths, setShowMyths] = useState(false);
+  useEffect(() => {
+    const check = () => setShowMyths(window.location.hash === "#/myths");
+    check();
+    window.addEventListener("hashchange", check);
+    return () => window.removeEventListener("hashchange", check);
   }, []);
 
   useEffect(() => {
@@ -216,6 +228,11 @@ function App() {
     <div className="h-screen overflow-hidden bg-slate-100 text-slate-900">
       <div className="flex h-full">
         <WorldSidebar />
+        {showMyths && (
+          <div className="w-96 border-l border-slate-200 bg-white/90 p-4">
+            <EpochMythsPanel />
+          </div>
+        )}
         <div className="flex h-full flex-1 flex-col overflow-hidden">
           <header className="border-b border-slate-200 bg-white/80 px-6 py-5 shadow-sm">
             <div className="flex flex-col gap-4 lg:flex-row lg:items-center lg:justify-between">
@@ -247,6 +264,9 @@ function App() {
             {pending.tick ? "Такт..." : "Такт симуляции"}
                   </Button>
           <Button onClick={() => runDevAction("tickAdvance")} disabled={pending.tick}>Такт + время</Button>
+                  <Button onClick={() => (window.location.hash = "#/myths")}>
+                    Мифы эпох
+                  </Button>
                 </div>
                 <div className={cn("text-xs", statusToneClass)}>
                   {status?.text ?? "Dev-операции готовы."}

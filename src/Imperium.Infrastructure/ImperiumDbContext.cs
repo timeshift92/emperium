@@ -15,8 +15,14 @@ public class ImperiumDbContext : DbContext
     public DbSet<Character> Characters { get; set; } = null!;
     public DbSet<Family> Families { get; set; } = null!;
     public DbSet<Location> Locations { get; set; } = null!;
+    public DbSet<Faction> Factions { get; set; } = null!;
+    public DbSet<NpcEssence> NpcEssences { get; set; } = null!;
     public DbSet<EconomySnapshot> EconomySnapshots { get; set; } = null!;
     public DbSet<WeatherSnapshot> WeatherSnapshots { get; set; } = null!;
+    public DbSet<Building> Buildings { get; set; } = null!;
+    public DbSet<KnowledgeField> KnowledgeFields { get; set; } = null!;
+    public DbSet<WorldChronicle> WorldChronicles { get; set; } = null!;
+    public DbSet<Rumor> Rumors { get; set; } = null!;
     public DbSet<SeasonState> SeasonStates { get; set; } = null!;
     public DbSet<GameEvent> GameEvents { get; set; } = null!;
     public DbSet<WorldTime> WorldTimes { get; set; } = null!;
